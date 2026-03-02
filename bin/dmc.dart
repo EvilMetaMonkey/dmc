@@ -1,5 +1,5 @@
-import 'package:dmc/dmc.dart' as dmc;
+import 'package:dmc/dmc.dart';
 
 void main(List<String> arguments) {
-  print('Hello world: ${dmc.calculate()}!');
+  runCli(arguments);
 }

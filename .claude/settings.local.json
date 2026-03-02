@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dart pub:*)",
+      "Bash(dart analyze:*)",
+      "Bash(dart test:*)",
+      "Bash(rm:*)",
+      "Bash(dart run:*)"
+    ]
+  }
+}
