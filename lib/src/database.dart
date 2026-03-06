@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 /// Database manager for DMC's SQLite storage
@@ -82,7 +84,8 @@ class DmcDatabase {
 
   /// Get recent backup logs
   /// Returns list of (file_path, snapshot_path, timestamp, hash) ordered by timestamp desc
-  List<({String filePath, String snapshotPath, int timestamp, String hash})> getRecentLogs({int limit = 10}) {
+  List<({String filePath, String snapshotPath, int timestamp, String hash})>
+  getRecentLogs({int limit = 10}) {
     if (_db == null) return [];
 
     final result = _db!.select(
@@ -90,22 +93,30 @@ class DmcDatabase {
       [limit],
     );
 
-    return result.map((row) => (
-      filePath: row['file_path'] as String,
-      snapshotPath: row['snapshot_path'] as String,
-      timestamp: row['timestamp'] as int,
-      hash: row['hash'] as String,
-    )).toList();
+    return result
+        .map(
+          (row) => (
+            filePath: row['file_path'] as String,
+            snapshotPath: row['snapshot_path'] as String,
+            timestamp: row['timestamp'] as int,
+            hash: row['hash'] as String,
+          ),
+        )
+        .toList();
   }
 
-  /// Get the most recent snapshot for a specific file path
-  /// Returns (snapshot_path, timestamp) or null if no snapshot exists
-  ({String snapshotPath, int timestamp})? getSnapshotForRestore(String filePath) {
+  /// Get the most recent snapshot for a specific file path whose hash differs
+  /// from the current working file.
+  /// Returns (snapshot_path, timestamp) or null if no previous snapshot exists
+  ({String snapshotPath, int timestamp})? getSnapshotForRestore(
+    String filePath,
+    String currentHash,
+  ) {
     if (_db == null) return null;
 
     final result = _db!.select(
-      'SELECT snapshot_path, timestamp FROM history WHERE file_path = ? ORDER BY timestamp DESC LIMIT 1',
-      [filePath],
+      'SELECT snapshot_path, timestamp FROM history WHERE file_path = ? AND hash != ? ORDER BY timestamp DESC LIMIT 1',
+      [filePath, currentHash],
     );
 
     if (result.isEmpty) return null;
@@ -114,5 +125,35 @@ class DmcDatabase {
       snapshotPath: result.first['snapshot_path'] as String,
       timestamp: result.first['timestamp'] as int,
     );
+  }
+
+  /// Delete snapshots and history rows older than [maxAge].
+  Future<int> pruneOldSnapshots(Duration maxAge) async {
+    if (_db == null) return 0;
+
+    final cutoff = DateTime.now().subtract(maxAge).millisecondsSinceEpoch;
+    final expiredRows = _db!.select(
+      'SELECT snapshot_path FROM history WHERE timestamp < ?',
+      [cutoff],
+    );
+
+    if (expiredRows.isEmpty) return 0;
+
+    final snapshotsPath = p.join(p.dirname(dbPath), 'snapshots');
+
+    for (final row in expiredRows) {
+      final snapshotFile = File(
+        p.join(snapshotsPath, row['snapshot_path'] as String),
+      );
+
+      try {
+        await snapshotFile.delete();
+      } on FileSystemException {
+        // Ignore missing or manually deleted snapshot files.
+      }
+    }
+
+    _db!.execute('DELETE FROM history WHERE timestamp < ?', [cutoff]);
+    return expiredRows.length;
   }
 }

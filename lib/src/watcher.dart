@@ -14,16 +14,175 @@ const List<String> ignoredDirs = [
   'node_modules',
 ];
 
+/// The name of the optional user ignore file.
+const String dmcIgnoreFileName = '.dmcignore';
+
 /// Debounce delay in milliseconds
 const int debounceDelayMs = 500;
+
+/// Maximum snapshot retention while the watcher is running.
+const Duration snapshotRetention = Duration(hours: 48);
+
+class IgnoreRule {
+  final String pattern;
+  final bool directoryOnly;
+  final bool matchAnywhere;
+  final bool hasWildcard;
+
+  const IgnoreRule._({
+    required this.pattern,
+    required this.directoryOnly,
+    required this.matchAnywhere,
+    required this.hasWildcard,
+  });
+
+  factory IgnoreRule.defaultDirectory(String name) {
+    return IgnoreRule._(
+      pattern: p.normalize(name),
+      directoryOnly: true,
+      matchAnywhere: true,
+      hasWildcard: false,
+    );
+  }
+
+  static IgnoreRule? fromPattern(String rawPattern) {
+    final trimmed = rawPattern.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#')) return null;
+
+    final directoryOnly = trimmed.endsWith('/') || trimmed.endsWith('\\');
+    var normalized = trimmed
+        .replaceAll('/', p.separator)
+        .replaceAll('\\', p.separator);
+
+    if (normalized.startsWith('.${p.separator}')) {
+      normalized = normalized.substring(2);
+    }
+
+    normalized = p.normalize(normalized);
+    normalized = _trimTrailingSeparators(normalized);
+
+    if (normalized.isEmpty || normalized == '.') return null;
+
+    return IgnoreRule._(
+      pattern: normalized,
+      directoryOnly: directoryOnly,
+      matchAnywhere: !normalized.contains(p.separator),
+      hasWildcard: normalized.contains('*') || normalized.contains('?'),
+    );
+  }
+
+  bool matches(String relativePath) {
+    final normalizedRelativePath = p.normalize(relativePath);
+    if (normalizedRelativePath.isEmpty || normalizedRelativePath == '.') {
+      return false;
+    }
+
+    final segments = p.split(normalizedRelativePath);
+    if (matchAnywhere) {
+      return _matchesSegments(segments);
+    }
+
+    return _matchesPath(normalizedRelativePath);
+  }
+
+  bool _matchesSegments(List<String> segments) {
+    if (hasWildcard) {
+      final regex = _buildRegex(_toPosix(pattern));
+      return segments.any((segment) => regex.hasMatch(_toPosix(segment)));
+    }
+
+    return segments.any((segment) => _equals(segment, pattern));
+  }
+
+  bool _matchesPath(String relativePath) {
+    final pathText = _toPosix(relativePath);
+    final patternText = _toPosix(pattern);
+
+    if (hasWildcard) {
+      final regex = _buildRegex(patternText);
+      if (regex.hasMatch(pathText)) return true;
+    } else if (_equals(pathText, patternText)) {
+      return true;
+    }
+
+    return pathText.startsWith('$patternText/');
+  }
+
+  static RegExp _buildRegex(String pattern) {
+    final buffer = StringBuffer('^');
+
+    for (final rune in pattern.runes) {
+      final char = String.fromCharCode(rune);
+      switch (char) {
+        case '*':
+          buffer.write('[^/]*');
+          break;
+        case '?':
+          buffer.write('[^/]');
+          break;
+        default:
+          buffer.write(RegExp.escape(char));
+      }
+    }
+
+    buffer.write(r'$');
+    return RegExp(buffer.toString(), caseSensitive: !Platform.isWindows);
+  }
+
+  static String _trimTrailingSeparators(String value) {
+    var result = value;
+    while (result.endsWith(p.separator)) {
+      result = result.substring(0, result.length - p.separator.length);
+    }
+    return result;
+  }
+
+  static String _toPosix(String value) {
+    return value.replaceAll('\\', '/');
+  }
+
+  static bool _equals(String left, String right) {
+    if (Platform.isWindows) {
+      return left.toLowerCase() == right.toLowerCase();
+    }
+    return left == right;
+  }
+}
+
+Future<List<IgnoreRule>> loadIgnoreRules(String targetPath) async {
+  final rules = [
+    for (final ignoredDir in ignoredDirs)
+      IgnoreRule.defaultDirectory(ignoredDir),
+  ];
+
+  final ignoreFile = File(p.join(targetPath, dmcIgnoreFileName));
+  if (!await ignoreFile.exists()) return rules;
+
+  var userRuleCount = 0;
+  for (final line in await ignoreFile.readAsLines()) {
+    final rule = IgnoreRule.fromPattern(line);
+    if (rule == null) continue;
+
+    rules.add(rule);
+    userRuleCount++;
+  }
+
+  if (userRuleCount > 0) {
+    print('[DMC] Loaded $userRuleCount ignore rule(s) from $dmcIgnoreFileName');
+  }
+
+  return rules;
+}
 
 /// Watches a directory for file changes and backs up modified files
 class DmcWatcher {
   final String targetPath;
   final DmcDatabase database;
   final String snapshotsPath;
+  final List<IgnoreRule> ignoreRules;
 
   final Map<String, Timer> _pendingBackups = {};
+  late final String _normalizedTargetPath;
   StreamSubscription<FileSystemEvent>? _watchSubscription;
   bool _isRunning = false;
 
@@ -31,7 +190,10 @@ class DmcWatcher {
     required this.targetPath,
     required this.database,
     required this.snapshotsPath,
-  });
+    required this.ignoreRules,
+  }) {
+    _normalizedTargetPath = p.normalize(targetPath);
+  }
 
   /// Start watching for file changes
   void start() {
@@ -46,12 +208,14 @@ class DmcWatcher {
 
     print('[DMC] Watching: $targetPath');
 
-    _watchSubscription = dir.watch(recursive: true).listen(
-      (event) => _handleFileEvent(event),
-      onError: (error) {
-        print('[DMC] Watch error: $error');
-      },
-    );
+    _watchSubscription = dir
+        .watch(recursive: true)
+        .listen(
+          (event) => _handleFileEvent(event),
+          onError: (error) {
+            print('[DMC] Watch error: $error');
+          },
+        );
   }
 
   /// Stop watching for file changes
@@ -74,9 +238,8 @@ class DmcWatcher {
     // Only handle modify events
     if (event.type != FileSystemEvent.modify) return;
 
-    final filePath = event.path;
+    final filePath = p.normalize(event.path);
 
-    // Check if file is in an ignored directory
     if (_isIgnored(filePath)) return;
 
     // Only process files (not directories)
@@ -91,16 +254,21 @@ class DmcWatcher {
     );
   }
 
-  /// Check if a file path is in an ignored directory
   bool _isIgnored(String filePath) {
-    for (final ignored in ignoredDirs) {
-      if (filePath.contains('/$ignored/') ||
-          filePath.contains('\\$ignored\\') ||
-          filePath.endsWith('/$ignored') ||
-          filePath.endsWith('\\$ignored')) {
+    final relativePath = p.normalize(
+      p.relative(filePath, from: _normalizedTargetPath),
+    );
+
+    if (relativePath == '..' || relativePath.startsWith('..${p.separator}')) {
+      return false;
+    }
+
+    for (final rule in ignoreRules) {
+      if (rule.matches(relativePath)) {
         return true;
       }
     }
+
     return false;
   }
 
@@ -109,7 +277,9 @@ class DmcWatcher {
     _pendingBackups.remove(filePath);
 
     // Calculate relative path from target directory
-    final relativePath = p.relative(filePath, from: targetPath);
+    final relativePath = p.normalize(
+      p.relative(filePath, from: _normalizedTargetPath),
+    );
 
     try {
       // Read file content
@@ -156,7 +326,8 @@ class DmcWatcher {
 /// Start watching the target directory for changes
 Future<void> watchDmc({String? basePath}) async {
   final cwd = basePath ?? Directory.current.path;
-  final dmcPath = p.join(cwd, dmcDirName);
+  final normalizedCwd = p.normalize(cwd);
+  final dmcPath = p.join(normalizedCwd, dmcDirName);
   final snapshotsPath = p.join(dmcPath, snapshotsDirName);
   final dbPath = p.join(dmcPath, dbFileName);
 
@@ -171,11 +342,19 @@ Future<void> watchDmc({String? basePath}) async {
   final db = DmcDatabase(dbPath);
   db.initialize();
 
+  final prunedCount = await db.pruneOldSnapshots(snapshotRetention);
+  if (prunedCount > 0) {
+    print('[DMC] Pruned $prunedCount expired snapshot(s)');
+  }
+
+  final ignoreRules = await loadIgnoreRules(normalizedCwd);
+
   // Create watcher
   final watcher = DmcWatcher(
-    targetPath: cwd,
+    targetPath: normalizedCwd,
     database: db,
     snapshotsPath: snapshotsPath,
+    ignoreRules: ignoreRules,
   );
 
   // Handle shutdown signals

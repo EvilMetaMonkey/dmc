@@ -1,7 +1,13 @@
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'database.dart';
 import 'init.dart';
+
+Future<String> _computeFileHash(File file) async {
+  final content = await file.readAsBytes();
+  return sha256.convert(content).toString();
+}
 
 /// Format a Unix timestamp to a human-readable string
 String formatTimestamp(int unixTime) {
@@ -72,15 +78,26 @@ Future<void> undoFile(String filePath, {String? basePath}) async {
   }
 
   // Normalize the file path to be relative
-  final absolutePath = p.isAbsolute(filePath) ? filePath : p.join(cwd, filePath);
+  final absolutePath = p.isAbsolute(filePath)
+      ? filePath
+      : p.join(cwd, filePath);
   final relativePath = p.relative(absolutePath, from: cwd);
+  final targetFilePath = p.join(cwd, relativePath);
+  final targetFile = File(targetFilePath);
+
+  if (!await targetFile.exists()) {
+    print('[DMC] Error: File not found: $filePath');
+    return;
+  }
 
   // Open database
   final db = DmcDatabase(dbPath);
   db.initialize();
 
-  // Get latest snapshot for this file
-  final snapshot = db.getSnapshotForRestore(relativePath);
+  final currentHash = await _computeFileHash(targetFile);
+
+  // Get latest snapshot for this file that differs from the current contents
+  final snapshot = db.getSnapshotForRestore(relativePath, currentHash);
 
   if (snapshot == null) {
     print('[DMC] No history found for $filePath');
@@ -90,7 +107,6 @@ Future<void> undoFile(String filePath, {String? basePath}) async {
 
   // Build paths
   final snapshotFilePath = p.join(snapshotsPath, snapshot.snapshotPath);
-  final targetFilePath = p.join(cwd, relativePath);
 
   // Check if snapshot file exists
   final snapshotFile = File(snapshotFilePath);
