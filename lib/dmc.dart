@@ -1,7 +1,20 @@
 // Re-export public API
+export 'src/config.dart';
+export 'src/daemon.dart';
+export 'src/doctor.dart';
 export 'src/cli.dart';
 export 'src/database.dart';
 export 'src/diff.dart';
+export 'src/gc.dart';
+export 'src/status.dart';
+export 'src/ignore.dart';
 export 'src/init.dart';
+export 'src/log.dart';
+export 'src/marks.dart';
 export 'src/restore.dart';
+export 'src/restore_events.dart';
+export 'src/snap.dart';
+export 'src/task.dart';
+export 'src/ui.dart';
 export 'src/watcher.dart';
+export 'src/workspace.dart';

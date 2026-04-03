@@ -1,17 +1,19 @@
 import 'dart:io';
-import 'package:crypto/crypto.dart';
 import 'package:diff_match_patch/diff_match_patch.dart';
 import 'package:path/path.dart' as p;
 import 'database.dart';
-import 'init.dart';
+import 'history_support.dart';
+import 'workspace.dart';
 
 const String _ansiRed = '\x1B[31m';
 const String _ansiGreen = '\x1B[32m';
 const String _ansiReset = '\x1B[0m';
 
-Future<String> _computeFileHash(File file) async {
-  final content = await file.readAsBytes();
-  return sha256.convert(content).toString();
+class DiffOutput {
+  final bool hadError;
+  final String? output;
+
+  const DiffOutput({required this.hadError, required this.output});
 }
 
 String buildColorizedDiff(String oldText, String newText) {
@@ -41,54 +43,208 @@ String buildColorizedDiff(String oldText, String newText) {
   return buffer.toString();
 }
 
-Future<void> showDiff(String filePath, {String? basePath}) async {
-  final cwd = p.normalize(basePath ?? Directory.current.path);
-  final dmcPath = p.join(cwd, dmcDirName);
-  final snapshotsPath = p.join(dmcPath, snapshotsDirName);
-  final dbPath = p.join(dmcPath, dbFileName);
+List<
+  ({
+    int id,
+    String filePath,
+    String snapshotPath,
+    int timestamp,
+    String hash,
+    int? burstId,
+    String? taskName,
+  })
+>
+_latestSnapshotsPerFileInBurst(
+  List<
+    ({
+      int id,
+      String filePath,
+      String snapshotPath,
+      int timestamp,
+      String hash,
+      int? burstId,
+      String? taskName,
+    })
+  >
+  snapshots,
+) {
+  final latestByFile =
+      <
+        String,
+        ({
+          int id,
+          String filePath,
+          String snapshotPath,
+          int timestamp,
+          String hash,
+          int? burstId,
+          String? taskName,
+        })
+      >{};
 
-  final dmcDir = Directory(dmcPath);
+  for (final snapshot in snapshots) {
+    latestByFile.putIfAbsent(snapshot.filePath, () => snapshot);
+  }
+
+  final latestSnapshots = latestByFile.values.toList();
+  latestSnapshots.sort((left, right) {
+    final timestampComparison = right.timestamp.compareTo(left.timestamp);
+    if (timestampComparison != 0) {
+      return timestampComparison;
+    }
+    return right.id.compareTo(left.id);
+  });
+  return latestSnapshots;
+}
+
+Future<bool> _showBurstDiff(int burstId, {String? basePath}) async {
+  final paths = DmcPaths(basePath: basePath);
+
+  final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return true;
   }
 
-  final absolutePath = p.isAbsolute(filePath)
-      ? p.normalize(filePath)
-      : p.normalize(p.join(cwd, filePath));
-  final relativePath = p.normalize(p.relative(absolutePath, from: cwd));
+  final db = DmcDatabase(paths.dbPath);
+  db.initialize();
+  final burstSnapshots = db.getSnapshotsForBurst(burstId);
+  db.close();
 
-  final currentFile = File(p.join(cwd, relativePath));
-  if (!await currentFile.exists()) {
-    print('[DMC] Error: File not found: $filePath');
-    return;
+  if (burstSnapshots.isEmpty) {
+    print('[DMC] Error: Burst ID $burstId not found.');
+    return true;
   }
 
-  final db = DmcDatabase(dbPath);
+  final targets = _latestSnapshotsPerFileInBurst(burstSnapshots);
+  print('[DMC] Burst diff for $burstId (${targets.length} file(s))');
+
+  var hadError = false;
+  for (final target in targets) {
+    print('');
+    print(
+      '[DMC] Diff for ${target.filePath} [Burst: $burstId, Snapshot ID: ${target.id}]',
+    );
+    final diffHadError = await showDiff(
+      target.filePath,
+      id: target.id,
+      basePath: basePath,
+    );
+    hadError = hadError || diffHadError;
+  }
+
+  return hadError;
+}
+
+Future<bool> showDiff(
+  String filePath, {
+  int? id,
+  int? burstId,
+  String? basePath,
+}) async {
+  if (id != null && burstId != null) {
+    print('[DMC] Error: Use either --id or --burst, not both.');
+    return true;
+  }
+
+  if (burstId != null) {
+    return _showBurstDiff(burstId, basePath: basePath);
+  }
+
+  final diffOutput = await buildDiffOutput(
+    filePath,
+    id: id,
+    basePath: basePath,
+  );
+  if (diffOutput.output != null) {
+    print(diffOutput.output);
+  }
+  return diffOutput.hadError;
+}
+
+Future<DiffOutput> buildDiffOutput(
+  String filePath, {
+  int? id,
+  String? basePath,
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+
+  final dmcDir = paths.dmcDirectory;
+  if (!await dmcDir.exists()) {
+    return const DiffOutput(
+      hadError: true,
+      output: '[DMC] Error: DMC not initialized. Run "dmc init" first.',
+    );
+  }
+
+  final target = paths.resolveFile(filePath);
+
+  final db = DmcDatabase(paths.dbPath);
   db.initialize();
 
-  final currentHash = await _computeFileHash(currentFile);
-  final snapshot = db.getSnapshotForRestore(relativePath, currentHash);
-  if (snapshot == null) {
-    print('[DMC] No history found for $filePath');
-    db.close();
-    return;
-  }
+  final selectionResult = await resolveSnapshotSelection(
+    database: db,
+    target: target,
+    id: id,
+    requireExistingTarget: false,
+  );
+  final snapshot = selectionResult.selection;
 
-  final snapshotFile = File(p.join(snapshotsPath, snapshot.snapshotPath));
-  if (!await snapshotFile.exists()) {
-    print('[DMC] Error: Snapshot file not found: ${snapshot.snapshotPath}');
+  if (snapshot == null) {
+    if (!selectionResult.hadLookupError) {
+      db.close();
+      return DiffOutput(
+        hadError: false,
+        output: '[DMC] No history found for $filePath',
+      );
+    }
     db.close();
-    return;
+    return const DiffOutput(hadError: true, output: null);
   }
 
   try {
-    final snapshotText = await snapshotFile.readAsString();
-    final currentText = await currentFile.readAsString();
-    print(buildColorizedDiff(snapshotText, currentText));
-  } catch (e) {
-    print('[DMC] Error generating diff: $e');
-  }
+    final currentText = await target.file.exists()
+        ? await target.file.readAsString()
+        : '';
+    if (snapshot.isTombstone) {
+      db.close();
+      return DiffOutput(
+        hadError: false,
+        output: buildColorizedDiff(currentText, ''),
+      );
+    }
 
-  db.close();
+    final snapshotFile = File(
+      p.join(paths.snapshotsPath, snapshot.snapshotPath),
+    );
+    if (!await snapshotFile.exists()) {
+      db.close();
+      return DiffOutput(
+        hadError: true,
+        output:
+            '[DMC] Error: Snapshot file not found: ${snapshot.snapshotPath}',
+      );
+    }
+
+    final snapshotText = await snapshotFile.readAsString();
+    if (!await target.file.exists()) {
+      db.close();
+      return DiffOutput(
+        hadError: false,
+        output: buildColorizedDiff('', snapshotText),
+      );
+    }
+
+    db.close();
+    return DiffOutput(
+      hadError: false,
+      output: buildColorizedDiff(snapshotText, currentText),
+    );
+  } catch (e) {
+    db.close();
+    return DiffOutput(
+      hadError: true,
+      output: '[DMC] Error generating diff: $e',
+    );
+  }
 }

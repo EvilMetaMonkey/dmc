@@ -2,176 +2,64 @@ import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'config.dart';
 import 'database.dart';
-import 'init.dart';
-
-/// Directories to ignore when watching for file changes
-const List<String> ignoredDirs = [
-  '.git',
-  '.dmc',
-  '.dart_tool',
-  'build',
-  'node_modules',
-];
-
-/// The name of the optional user ignore file.
-const String dmcIgnoreFileName = '.dmcignore';
+import 'ignore.dart';
+import 'task.dart';
+import 'workspace.dart';
 
 /// Debounce delay in milliseconds
 const int debounceDelayMs = 500;
 
-/// Maximum snapshot retention while the watcher is running.
-const Duration snapshotRetention = Duration(hours: 48);
+/// Snapshots captured within this window share the same burst id.
+const Duration burstWindow = Duration(seconds: 3);
 
-class IgnoreRule {
-  final String pattern;
-  final bool directoryOnly;
-  final bool matchAnywhere;
-  final bool hasWildcard;
+const int _binaryProbeBytes = 1024;
+const Set<String> _knownBinaryExtensions = {
+  '.exe',
+  '.dll',
+  '.so',
+  '.dylib',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.pdf',
+  '.zip',
+  '.tar',
+  '.gz',
+  '.7z',
+  '.mp3',
+  '.mp4',
+  '.mov',
+  '.avi',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.otf',
+  '.sqlite',
+  '.db',
+};
 
-  const IgnoreRule._({
-    required this.pattern,
-    required this.directoryOnly,
-    required this.matchAnywhere,
-    required this.hasWildcard,
-  });
+class BurstAssigner {
+  final Duration window;
+  int? _activeBurstId;
+  int? _lastSnapshotTimestamp;
 
-  factory IgnoreRule.defaultDirectory(String name) {
-    return IgnoreRule._(
-      pattern: p.normalize(name),
-      directoryOnly: true,
-      matchAnywhere: true,
-      hasWildcard: false,
-    );
-  }
+  BurstAssigner({this.window = burstWindow});
 
-  static IgnoreRule? fromPattern(String rawPattern) {
-    final trimmed = rawPattern.trim();
-    if (trimmed.isEmpty || trimmed.startsWith('#')) return null;
-
-    final directoryOnly = trimmed.endsWith('/') || trimmed.endsWith('\\');
-    var normalized = trimmed
-        .replaceAll('/', p.separator)
-        .replaceAll('\\', p.separator);
-
-    if (normalized.startsWith('.${p.separator}')) {
-      normalized = normalized.substring(2);
+  int assignBurstId(int timestamp) {
+    if (_activeBurstId == null ||
+        _lastSnapshotTimestamp == null ||
+        timestamp - _lastSnapshotTimestamp! > window.inMilliseconds) {
+      _activeBurstId = timestamp;
     }
 
-    normalized = p.normalize(normalized);
-    normalized = _trimTrailingSeparators(normalized);
-
-    if (normalized.isEmpty || normalized == '.') return null;
-
-    return IgnoreRule._(
-      pattern: normalized,
-      directoryOnly: directoryOnly,
-      matchAnywhere: !normalized.contains(p.separator),
-      hasWildcard: normalized.contains('*') || normalized.contains('?'),
-    );
+    _lastSnapshotTimestamp = timestamp;
+    return _activeBurstId!;
   }
-
-  bool matches(String relativePath) {
-    final normalizedRelativePath = p.normalize(relativePath);
-    if (normalizedRelativePath.isEmpty || normalizedRelativePath == '.') {
-      return false;
-    }
-
-    final segments = p.split(normalizedRelativePath);
-    if (matchAnywhere) {
-      return _matchesSegments(segments);
-    }
-
-    return _matchesPath(normalizedRelativePath);
-  }
-
-  bool _matchesSegments(List<String> segments) {
-    if (hasWildcard) {
-      final regex = _buildRegex(_toPosix(pattern));
-      return segments.any((segment) => regex.hasMatch(_toPosix(segment)));
-    }
-
-    return segments.any((segment) => _equals(segment, pattern));
-  }
-
-  bool _matchesPath(String relativePath) {
-    final pathText = _toPosix(relativePath);
-    final patternText = _toPosix(pattern);
-
-    if (hasWildcard) {
-      final regex = _buildRegex(patternText);
-      if (regex.hasMatch(pathText)) return true;
-    } else if (_equals(pathText, patternText)) {
-      return true;
-    }
-
-    return pathText.startsWith('$patternText/');
-  }
-
-  static RegExp _buildRegex(String pattern) {
-    final buffer = StringBuffer('^');
-
-    for (final rune in pattern.runes) {
-      final char = String.fromCharCode(rune);
-      switch (char) {
-        case '*':
-          buffer.write('[^/]*');
-          break;
-        case '?':
-          buffer.write('[^/]');
-          break;
-        default:
-          buffer.write(RegExp.escape(char));
-      }
-    }
-
-    buffer.write(r'$');
-    return RegExp(buffer.toString(), caseSensitive: !Platform.isWindows);
-  }
-
-  static String _trimTrailingSeparators(String value) {
-    var result = value;
-    while (result.endsWith(p.separator)) {
-      result = result.substring(0, result.length - p.separator.length);
-    }
-    return result;
-  }
-
-  static String _toPosix(String value) {
-    return value.replaceAll('\\', '/');
-  }
-
-  static bool _equals(String left, String right) {
-    if (Platform.isWindows) {
-      return left.toLowerCase() == right.toLowerCase();
-    }
-    return left == right;
-  }
-}
-
-Future<List<IgnoreRule>> loadIgnoreRules(String targetPath) async {
-  final rules = [
-    for (final ignoredDir in ignoredDirs)
-      IgnoreRule.defaultDirectory(ignoredDir),
-  ];
-
-  final ignoreFile = File(p.join(targetPath, dmcIgnoreFileName));
-  if (!await ignoreFile.exists()) return rules;
-
-  var userRuleCount = 0;
-  for (final line in await ignoreFile.readAsLines()) {
-    final rule = IgnoreRule.fromPattern(line);
-    if (rule == null) continue;
-
-    rules.add(rule);
-    userRuleCount++;
-  }
-
-  if (userRuleCount > 0) {
-    print('[DMC] Loaded $userRuleCount ignore rule(s) from $dmcIgnoreFileName');
-  }
-
-  return rules;
 }
 
 /// Watches a directory for file changes and backs up modified files
@@ -180,6 +68,10 @@ class DmcWatcher {
   final DmcDatabase database;
   final String snapshotsPath;
   final List<IgnoreRule> ignoreRules;
+  final BurstAssigner burstAssigner;
+  final int Function() _nowMilliseconds;
+  final int maxFileSizeBytes;
+  final String? Function() _activeTaskNameProvider;
 
   final Map<String, Timer> _pendingBackups = {};
   late final String _normalizedTargetPath;
@@ -191,7 +83,14 @@ class DmcWatcher {
     required this.database,
     required this.snapshotsPath,
     required this.ignoreRules,
-  }) {
+    required this.maxFileSizeBytes,
+    String? Function()? activeTaskNameProvider,
+    BurstAssigner? burstAssigner,
+    int Function()? nowMilliseconds,
+  }) : burstAssigner = burstAssigner ?? BurstAssigner(),
+       _activeTaskNameProvider = activeTaskNameProvider ?? (() => null),
+       _nowMilliseconds =
+           nowMilliseconds ?? (() => DateTime.now().millisecondsSinceEpoch) {
     _normalizedTargetPath = p.normalize(targetPath);
   }
 
@@ -218,6 +117,16 @@ class DmcWatcher {
         );
   }
 
+  /// Capture a file immediately without debounce. Useful for focused tests.
+  Future<void> captureFileNow(String filePath) async {
+    final normalizedPath = p.normalize(filePath);
+    if (_isIgnored(normalizedPath)) {
+      return;
+    }
+
+    await _performBackup(normalizedPath);
+  }
+
   /// Stop watching for file changes
   void stop() {
     _isRunning = false;
@@ -235,16 +144,15 @@ class DmcWatcher {
 
   /// Handle a file system event
   void _handleFileEvent(FileSystemEvent event) {
-    // Only handle modify events
-    if (event.type != FileSystemEvent.modify) return;
+    // Only handle modify/delete events
+    if (event.type != FileSystemEvent.modify &&
+        event.type != FileSystemEvent.delete) {
+      return;
+    }
 
     final filePath = p.normalize(event.path);
 
     if (_isIgnored(filePath)) return;
-
-    // Only process files (not directories)
-    final file = File(filePath);
-    if (!file.existsSync()) return;
 
     // Debounce: cancel existing timer and start new one
     _pendingBackups[filePath]?.cancel();
@@ -272,6 +180,10 @@ class DmcWatcher {
     return false;
   }
 
+  bool shouldTrackFile(String filePath) {
+    return !_isIgnored(p.normalize(filePath));
+  }
+
   /// Perform the backup for a file
   Future<void> _performBackup(String filePath) async {
     _pendingBackups.remove(filePath);
@@ -282,8 +194,45 @@ class DmcWatcher {
     );
 
     try {
-      // Read file content
       final file = File(filePath);
+      final timestamp = _nowMilliseconds();
+      final burstId = burstAssigner.assignBurstId(timestamp);
+      final taskName = _activeTaskNameProvider();
+
+      if (!await file.exists()) {
+        final latestSnapshot = database.getLatestSnapshot(relativePath);
+        if (latestSnapshot == null ||
+            isTombstoneSnapshot(
+              hash: latestSnapshot.hash,
+              snapshotPath: latestSnapshot.snapshotPath,
+            )) {
+          return;
+        }
+
+        database.insertTombstone(
+          filePath: relativePath,
+          timestamp: timestamp,
+          burstId: burstId,
+          taskName: taskName,
+        );
+        print('[DMC] Captured deletion: $relativePath');
+        return;
+      }
+
+      // Read file content
+      final fileSizeBytes = await file.length();
+      if (fileSizeBytes > maxFileSizeBytes) {
+        print(
+          '[DMC] Skipping $relativePath: file exceeds max size (${maxFileSizeBytes ~/ 1024} KB).',
+        );
+        return;
+      }
+
+      if (await _isProbablyBinaryFile(file)) {
+        print('[DMC] Skipping $relativePath: binary files are not tracked.');
+        return;
+      }
+
       final content = await file.readAsBytes();
 
       // Calculate SHA-256 hash
@@ -298,7 +247,6 @@ class DmcWatcher {
       }
 
       // Generate snapshot filename
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
       final filename = p.basenameWithoutExtension(filePath);
       final extension = p.extension(filePath);
       final snapshotFilename = '${filename}_$timestamp$extension.bak';
@@ -313,6 +261,8 @@ class DmcWatcher {
         snapshotPath: snapshotFilename,
         timestamp: timestamp,
         hash: hash,
+        burstId: burstId,
+        taskName: taskName,
       );
 
       print('[DMC] Captured change: $relativePath');
@@ -325,36 +275,43 @@ class DmcWatcher {
 
 /// Start watching the target directory for changes
 Future<void> watchDmc({String? basePath}) async {
-  final cwd = basePath ?? Directory.current.path;
-  final normalizedCwd = p.normalize(cwd);
-  final dmcPath = p.join(normalizedCwd, dmcDirName);
-  final snapshotsPath = p.join(dmcPath, snapshotsDirName);
-  final dbPath = p.join(dmcPath, dbFileName);
+  final paths = DmcPaths(basePath: basePath);
 
   // Verify DMC is initialized
-  final dmcDir = Directory(dmcPath);
+  final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
     return;
   }
 
   // Initialize database
-  final db = DmcDatabase(dbPath);
+  final db = DmcDatabase(paths.dbPath);
   db.initialize();
 
-  final prunedCount = await db.pruneOldSnapshots(snapshotRetention);
+  late final DmcConfig config;
+  try {
+    config = await loadDmcConfig(basePath: paths.rootPath);
+  } catch (e) {
+    print('[DMC] Error loading config: $e');
+    db.close();
+    return;
+  }
+
+  final prunedCount = await db.pruneOldSnapshots(config.retentionDuration);
   if (prunedCount > 0) {
     print('[DMC] Pruned $prunedCount expired snapshot(s)');
   }
 
-  final ignoreRules = await loadIgnoreRules(normalizedCwd);
+  final ignoreRules = await loadIgnoreRules(paths.rootPath);
 
   // Create watcher
   final watcher = DmcWatcher(
-    targetPath: normalizedCwd,
+    targetPath: paths.rootPath,
     database: db,
-    snapshotsPath: snapshotsPath,
+    snapshotsPath: paths.snapshotsPath,
     ignoreRules: ignoreRules,
+    maxFileSizeBytes: config.maxFileSizeBytes,
+    activeTaskNameProvider: () => readActiveTaskSync(basePath: paths.rootPath),
   );
 
   // Handle shutdown signals
@@ -370,4 +327,19 @@ Future<void> watchDmc({String? basePath}) async {
 
   // Keep the process running
   await Future<void>.delayed(Duration(days: 1));
+}
+
+Future<bool> _isProbablyBinaryFile(File file) async {
+  final extension = p.extension(file.path).toLowerCase();
+  if (_knownBinaryExtensions.contains(extension)) {
+    return true;
+  }
+
+  final handle = await file.open();
+  try {
+    final headerBytes = await handle.read(_binaryProbeBytes);
+    return headerBytes.any((byte) => byte == 0);
+  } finally {
+    await handle.close();
+  }
 }

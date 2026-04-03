@@ -1,130 +1,778 @@
 import 'dart:io';
-import 'package:crypto/crypto.dart';
+
 import 'package:path/path.dart' as p;
+
+import 'diff.dart';
 import 'database.dart';
-import 'init.dart';
+import 'history_support.dart';
+import 'log.dart';
+import 'restore_events.dart';
+import 'task.dart';
+import 'workspace.dart';
 
-Future<String> _computeFileHash(File file) async {
-  final content = await file.readAsBytes();
-  return sha256.convert(content).toString();
+class RestorePlan {
+  final SnapshotSelection snapshot;
+  final String targetFilePath;
+  final String? snapshotFilePath;
+
+  const RestorePlan({
+    required this.snapshot,
+    required this.targetFilePath,
+    required this.snapshotFilePath,
+  });
 }
 
-/// Format a Unix timestamp to a human-readable string
-String formatTimestamp(int unixTime) {
-  final dateTime = DateTime.fromMillisecondsSinceEpoch(unixTime);
-  final year = dateTime.year;
-  final month = dateTime.month.toString().padLeft(2, '0');
-  final day = dateTime.day.toString().padLeft(2, '0');
-  final hour = dateTime.hour.toString().padLeft(2, '0');
-  final minute = dateTime.minute.toString().padLeft(2, '0');
-  final second = dateTime.second.toString().padLeft(2, '0');
-  return '$year-$month-$day $hour:$minute:$second';
+class RestorePlanResult {
+  final String dbPath;
+  final RestorePlan? plan;
+  final ResolvedFileTarget target;
+  final bool hadError;
+
+  const RestorePlanResult._({
+    required this.dbPath,
+    required this.plan,
+    required this.target,
+    required this.hadError,
+  });
+
+  factory RestorePlanResult.ready({
+    required String dbPath,
+    required RestorePlan plan,
+    required ResolvedFileTarget target,
+  }) {
+    return RestorePlanResult._(
+      dbPath: dbPath,
+      plan: plan,
+      target: target,
+      hadError: false,
+    );
+  }
+
+  factory RestorePlanResult.notPossible({
+    required String dbPath,
+    required ResolvedFileTarget target,
+  }) {
+    return RestorePlanResult._(
+      dbPath: dbPath,
+      plan: null,
+      target: target,
+      hadError: false,
+    );
+  }
+
+  factory RestorePlanResult.error({
+    required String dbPath,
+    required ResolvedFileTarget target,
+  }) {
+    return RestorePlanResult._(
+      dbPath: dbPath,
+      plan: null,
+      target: target,
+      hadError: true,
+    );
+  }
 }
 
-/// Show recent backup logs
-Future<void> showLogs({int limit = 10, String? basePath}) async {
-  final cwd = basePath ?? Directory.current.path;
-  final dmcPath = p.join(cwd, dmcDirName);
-  final dbPath = p.join(dmcPath, dbFileName);
+class RestoreResult {
+  final bool hadError;
+  final bool restorePossible;
 
-  // Verify DMC is initialized
-  final dmcDir = Directory(dmcPath);
+  const RestoreResult._({
+    required this.hadError,
+    required this.restorePossible,
+  });
+
+  factory RestoreResult.success({required bool restorePossible}) {
+    return RestoreResult._(hadError: false, restorePossible: restorePossible);
+  }
+
+  factory RestoreResult.error() {
+    return const RestoreResult._(hadError: true, restorePossible: false);
+  }
+}
+
+List<
+  ({
+    int id,
+    String filePath,
+    String snapshotPath,
+    int timestamp,
+    String hash,
+    int? burstId,
+    String? taskName,
+  })
+>
+_latestSnapshotsPerFileInBurst(
+  List<
+    ({
+      int id,
+      String filePath,
+      String snapshotPath,
+      int timestamp,
+      String hash,
+      int? burstId,
+      String? taskName,
+    })
+  >
+  snapshots,
+) {
+  final latestByFile =
+      <
+        String,
+        ({
+          int id,
+          String filePath,
+          String snapshotPath,
+          int timestamp,
+          String hash,
+          int? burstId,
+          String? taskName,
+        })
+      >{};
+
+  for (final snapshot in snapshots) {
+    latestByFile.putIfAbsent(snapshot.filePath, () => snapshot);
+  }
+
+  final latestSnapshots = latestByFile.values.toList();
+  latestSnapshots.sort((left, right) {
+    final timestampComparison = right.timestamp.compareTo(left.timestamp);
+    if (timestampComparison != 0) {
+      return timestampComparison;
+    }
+    return right.id.compareTo(left.id);
+  });
+  return latestSnapshots;
+}
+
+void _warnIfNewerSnapshotExists({
+  required DmcDatabase database,
+  required String filePath,
+  required int targetSnapshotId,
+  required int targetTimestamp,
+  required String scopeLabel,
+}) {
+  final latestSnapshot = database.getLatestSnapshot(filePath);
+  if (latestSnapshot == null) return;
+
+  if (latestSnapshot.id != targetSnapshotId &&
+      latestSnapshot.timestamp > targetTimestamp) {
+    print(
+      '[DMC] Warning: $filePath has newer history than $scopeLabel. Restoring snapshot ID $targetSnapshotId anyway.',
+    );
+  }
+}
+
+Future<RestoreResult> _restoreBurstSnapshots(
+  int burstId, {
+  required String commandName,
+  String? basePath,
+  bool dryRun = false,
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return RestoreResult.error();
   }
 
-  // Open database
-  final db = DmcDatabase(dbPath);
+  final db = DmcDatabase(paths.dbPath);
   db.initialize();
-
-  final logs = db.getRecentLogs(limit: limit);
-
-  if (logs.isEmpty) {
-    print('[DMC] No backup history found.');
+  final burstSnapshots = db.getSnapshotsForBurst(burstId);
+  if (burstSnapshots.isEmpty) {
     db.close();
-    return;
+    print('[DMC] Error: Burst ID $burstId not found.');
+    return RestoreResult.error();
   }
 
-  // Print header
-  print('');
-  print('Recent Backups:');
-  print('-' * 60);
+  final targets = _latestSnapshotsPerFileInBurst(burstSnapshots);
+  print(
+    '[DMC] ${dryRun ? 'Burst restore preview' : 'Burst restore'} for $burstId (${targets.length} file(s))',
+  );
 
-  for (final log in logs) {
-    final time = formatTimestamp(log.timestamp);
-    final shortHash = log.hash.substring(0, 8);
-    print('$time  ${log.filePath.padRight(30)}  $shortHash');
+  var hadError = false;
+  var restorePossible = false;
+  for (final target in targets) {
+    _warnIfNewerSnapshotExists(
+      database: db,
+      filePath: target.filePath,
+      targetSnapshotId: target.id,
+      targetTimestamp: target.timestamp,
+      scopeLabel: 'burst $burstId',
+    );
+    print('');
+    print(
+      '[DMC] ${dryRun ? 'Previewing' : 'Restoring'} ${target.filePath} [Burst: $burstId, Snapshot ID: ${target.id}]',
+    );
+    final result = await restoreFile(
+      target.filePath,
+      id: target.id,
+      basePath: basePath,
+      dryRun: dryRun,
+      commandName: commandName,
+    );
+    hadError = hadError || result.hadError;
+    restorePossible = restorePossible || result.restorePossible;
   }
-
-  print('-' * 60);
-  print('Total: ${logs.length} backup(s)');
 
   db.close();
+  return RestoreResult._(hadError: hadError, restorePossible: restorePossible);
 }
 
-/// Restore a file to its previous state
-Future<void> undoFile(String filePath, {String? basePath}) async {
-  final cwd = basePath ?? Directory.current.path;
-  final dmcPath = p.join(cwd, dmcDirName);
-  final snapshotsPath = p.join(dmcPath, snapshotsDirName);
-  final dbPath = p.join(dmcPath, dbFileName);
-
-  // Verify DMC is initialized
-  final dmcDir = Directory(dmcPath);
+Future<RestoreResult> _redoBurstSnapshots(
+  int burstId, {
+  String? basePath,
+  bool dryRun = false,
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return RestoreResult.error();
   }
 
-  // Normalize the file path to be relative
-  final absolutePath = p.isAbsolute(filePath)
-      ? filePath
-      : p.join(cwd, filePath);
-  final relativePath = p.relative(absolutePath, from: cwd);
-  final targetFilePath = p.join(cwd, relativePath);
-  final targetFile = File(targetFilePath);
+  final db = DmcDatabase(paths.dbPath);
+  db.initialize();
+  final burstSnapshots = db.getSnapshotsForBurst(burstId);
+  db.close();
 
-  if (!await targetFile.exists()) {
-    print('[DMC] Error: File not found: $filePath');
-    return;
+  if (burstSnapshots.isEmpty) {
+    print('[DMC] Error: Burst ID $burstId not found.');
+    return RestoreResult.error();
   }
 
-  // Open database
-  final db = DmcDatabase(dbPath);
+  final targets = _latestSnapshotsPerFileInBurst(burstSnapshots);
+  print(
+    '[DMC] ${dryRun ? 'Burst redo preview' : 'Burst redo'} for $burstId (${targets.length} file(s))',
+  );
+
+  var hadError = false;
+  var restorePossible = false;
+  for (final target in targets) {
+    print('');
+    print(
+      '[DMC] ${dryRun ? 'Previewing' : 'Redoing'} ${target.filePath} [Burst: $burstId]',
+    );
+    final result = await redoFile(
+      target.filePath,
+      basePath: basePath,
+      dryRun: dryRun,
+    );
+    hadError = hadError || result.hadError;
+    restorePossible = restorePossible || result.restorePossible;
+  }
+
+  return RestoreResult._(hadError: hadError, restorePossible: restorePossible);
+}
+
+Future<RestoreResult> _restoreTaskSnapshots(
+  String taskName, {
+  required String commandName,
+  String? basePath,
+  bool dryRun = false,
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final dmcDir = paths.dmcDirectory;
+  if (!await dmcDir.exists()) {
+    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+    return RestoreResult.error();
+  }
+
+  final db = DmcDatabase(paths.dbPath);
+  db.initialize();
+  final taskSnapshots = db.getSnapshotsForTask(taskName);
+  if (taskSnapshots.isEmpty) {
+    db.close();
+    print('[DMC] Error: Task "$taskName" not found.');
+    return RestoreResult.error();
+  }
+
+  final targets = _latestSnapshotsPerFileInBurst(taskSnapshots);
+  print(
+    '[DMC] ${dryRun ? 'Task restore preview' : 'Task restore'} for "$taskName" (${targets.length} file(s))',
+  );
+
+  var hadError = false;
+  var restorePossible = false;
+  for (final target in targets) {
+    _warnIfNewerSnapshotExists(
+      database: db,
+      filePath: target.filePath,
+      targetSnapshotId: target.id,
+      targetTimestamp: target.timestamp,
+      scopeLabel: 'task "$taskName"',
+    );
+    print('');
+    print(
+      '[DMC] ${dryRun ? 'Previewing' : 'Restoring'} ${target.filePath} [Task: $taskName, Snapshot ID: ${target.id}]',
+    );
+    final result = await restoreFile(
+      target.filePath,
+      id: target.id,
+      basePath: basePath,
+      dryRun: dryRun,
+      commandName: commandName,
+    );
+    hadError = hadError || result.hadError;
+    restorePossible = restorePossible || result.restorePossible;
+  }
+
+  db.close();
+  return RestoreResult._(hadError: hadError, restorePossible: restorePossible);
+}
+
+Future<RestoreResult> _redoTaskSnapshots(
+  String taskName, {
+  String? basePath,
+  bool dryRun = false,
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final dmcDir = paths.dmcDirectory;
+  if (!await dmcDir.exists()) {
+    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+    return RestoreResult.error();
+  }
+
+  final db = DmcDatabase(paths.dbPath);
+  db.initialize();
+  final taskSnapshots = db.getSnapshotsForTask(taskName);
+  db.close();
+
+  if (taskSnapshots.isEmpty) {
+    print('[DMC] Error: Task "$taskName" not found.');
+    return RestoreResult.error();
+  }
+
+  final targets = _latestSnapshotsPerFileInBurst(taskSnapshots);
+  print(
+    '[DMC] ${dryRun ? 'Task redo preview' : 'Task redo'} for "$taskName" (${targets.length} file(s))',
+  );
+
+  var hadError = false;
+  var restorePossible = false;
+  for (final target in targets) {
+    print('');
+    print(
+      '[DMC] ${dryRun ? 'Previewing' : 'Redoing'} ${target.filePath} [Task: $taskName]',
+    );
+    final result = await redoFile(
+      target.filePath,
+      basePath: basePath,
+      dryRun: dryRun,
+    );
+    hadError = hadError || result.hadError;
+    restorePossible = restorePossible || result.restorePossible;
+  }
+
+  return RestoreResult._(hadError: hadError, restorePossible: restorePossible);
+}
+
+Future<RestorePlanResult> planRestore(
+  String filePath, {
+  int? id,
+  String? basePath,
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final target = paths.resolveFile(filePath);
+
+  final dmcDir = paths.dmcDirectory;
+  if (!await dmcDir.exists()) {
+    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+    return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
+  }
+
+  final db = DmcDatabase(paths.dbPath);
   db.initialize();
 
-  final currentHash = await _computeFileHash(targetFile);
-
-  // Get latest snapshot for this file that differs from the current contents
-  final snapshot = db.getSnapshotForRestore(relativePath, currentHash);
+  final selectionResult = await resolveSnapshotSelection(
+    database: db,
+    target: target,
+    id: id,
+    requireExistingTarget: false,
+  );
+  final snapshot = selectionResult.selection;
+  db.close();
 
   if (snapshot == null) {
-    print('[DMC] No history found for $filePath');
-    db.close();
-    return;
+    if (selectionResult.hadLookupError) {
+      return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
+    }
+    return RestorePlanResult.notPossible(dbPath: paths.dbPath, target: target);
   }
 
-  // Build paths
-  final snapshotFilePath = p.join(snapshotsPath, snapshot.snapshotPath);
+  String? snapshotFilePath;
+  if (!snapshot.isTombstone) {
+    snapshotFilePath = p.join(paths.snapshotsPath, snapshot.snapshotPath);
+    final snapshotFile = File(snapshotFilePath);
+    if (!await snapshotFile.exists()) {
+      print('[DMC] Error: Snapshot file not found: ${snapshot.snapshotPath}');
+      return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
+    }
+  }
 
-  // Check if snapshot file exists
-  final snapshotFile = File(snapshotFilePath);
-  if (!await snapshotFile.exists()) {
-    print('[DMC] Error: Snapshot file not found: ${snapshot.snapshotPath}');
-    db.close();
-    return;
+  return RestorePlanResult.ready(
+    dbPath: paths.dbPath,
+    plan: RestorePlan(
+      snapshot: snapshot,
+      targetFilePath: target.workingPath,
+      snapshotFilePath: snapshotFilePath,
+    ),
+    target: target,
+  );
+}
+
+Future<RestoreResult> _previewRestorePlan(
+  RestorePlanResult planningResult,
+) async {
+  final plan = planningResult.plan;
+  print('[DMC] Restore preview');
+  print(
+    'Target snapshot ID: ${plan == null ? 'none' : plan.snapshot.snapshotId}',
+  );
+  print('Target file path: ${planningResult.target.workingPath}');
+  print('Restore possible: ${plan == null ? 'no' : 'yes'}');
+
+  if (plan == null) {
+    if (!planningResult.hadError) {
+      print('Reason: No prior snapshot differs from the current contents.');
+      return RestoreResult.success(restorePossible: false);
+    }
+
+    return RestoreResult.error();
   }
 
   try {
-    // Copy snapshot back to original location
-    await snapshotFile.copy(targetFilePath);
-
-    final time = formatTimestamp(snapshot.timestamp);
-    print('[DMC] Restored $filePath to version from $time');
+    final targetFile = File(plan.targetFilePath);
+    final currentText = await targetFile.exists()
+        ? await targetFile.readAsString()
+        : '';
+    final restoredText = plan.snapshot.isTombstone
+        ? ''
+        : await File(plan.snapshotFilePath!).readAsString();
+    final action = plan.snapshot.isTombstone
+        ? 'File will be deleted'
+        : await targetFile.exists()
+        ? 'File will be restored'
+        : 'File will be recreated';
+    print('Action: $action');
+    print('Diff (current -> restored):');
+    print(buildColorizedDiff(currentText, restoredText));
+    return RestoreResult.success(restorePossible: true);
   } catch (e) {
-    print('[DMC] Error restoring file: $e');
+    print('[DMC] Error generating restore preview: $e');
+    return RestoreResult.error();
+  }
+}
+
+Future<int?> _captureCurrentSnapshotIdBeforeRestore(
+  DmcDatabase db,
+  RestorePlan plan,
+) async {
+  final targetFile = File(plan.targetFilePath);
+  final timestamp = DateTime.now().millisecondsSinceEpoch;
+  final latestSnapshot = db.getLatestSnapshot(
+    plan.snapshot.target.relativePath,
+  );
+  final workspaceRoot = p.dirname(p.dirname(db.dbPath));
+  final activeTaskName = readActiveTaskSync(basePath: workspaceRoot);
+  if (!await targetFile.exists()) {
+    if (latestSnapshot != null &&
+        isTombstoneSnapshot(
+          hash: latestSnapshot.hash,
+          snapshotPath: latestSnapshot.snapshotPath,
+        )) {
+      return latestSnapshot.id;
+    }
+
+    db.insertTombstone(
+      filePath: plan.snapshot.target.relativePath,
+      timestamp: timestamp,
+      taskName: activeTaskName,
+    );
+    return db.db.lastInsertRowId;
   }
 
+  final currentHash = await computeFileHash(targetFile);
+  if (latestSnapshot != null && latestSnapshot.hash == currentHash) {
+    return latestSnapshot.id;
+  }
+
+  final filename = p.basenameWithoutExtension(plan.targetFilePath);
+  final extension = p.extension(plan.targetFilePath);
+  final snapshotFilename = '${filename}_$timestamp$extension.bak';
+  final snapshotPath = p.join(
+    p.dirname(plan.snapshotFilePath!),
+    snapshotFilename,
+  );
+
+  await targetFile.copy(snapshotPath);
+  db.insertSnapshot(
+    filePath: plan.snapshot.target.relativePath,
+    snapshotPath: snapshotFilename,
+    timestamp: timestamp,
+    hash: currentHash,
+    taskName: activeTaskName,
+  );
+  return db.db.lastInsertRowId;
+}
+
+Future<RestoreResult> _applyRestorePlan(
+  RestorePlanResult planningResult,
+  String filePath,
+  String commandName,
+) async {
+  final plan = planningResult.plan;
+  if (plan == null) {
+    if (!planningResult.hadError) {
+      print('[DMC] No history found for $filePath');
+      return RestoreResult.success(restorePossible: false);
+    }
+
+    return RestoreResult.error();
+  }
+
+  final db = DmcDatabase(planningResult.dbPath);
+  db.initialize();
+  final repository = RestoreEventRepository(db);
+  int? overwrittenSnapshotId;
+
+  try {
+    overwrittenSnapshotId = await _captureCurrentSnapshotIdBeforeRestore(
+      db,
+      plan,
+    );
+    if (plan.snapshot.isTombstone) {
+      final targetFile = File(plan.targetFilePath);
+      if (await targetFile.exists()) {
+        await targetFile.delete();
+      }
+    } else {
+      final targetFile = File(plan.targetFilePath);
+      await targetFile.parent.create(recursive: true);
+      await File(plan.snapshotFilePath!).copy(plan.targetFilePath);
+    }
+    repository.recordEvent(
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      command: commandName,
+      filePath: plan.snapshot.target.relativePath,
+      snapshotId: plan.snapshot.snapshotId,
+      success: true,
+      overwrittenSnapshotId: overwrittenSnapshotId,
+    );
+
+    final time = formatTimestamp(plan.snapshot.timestamp);
+    final action = plan.snapshot.isTombstone ? 'Deleted' : 'Restored';
+    print('[DMC] $action $filePath to version from $time');
+    return RestoreResult.success(restorePossible: true);
+  } catch (e) {
+    repository.recordEvent(
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      command: commandName,
+      filePath: plan.snapshot.target.relativePath,
+      snapshotId: plan.snapshot.snapshotId,
+      success: false,
+      failureMessage: e.toString(),
+      overwrittenSnapshotId: overwrittenSnapshotId,
+    );
+    print('[DMC] Error restoring file: $e');
+    return RestoreResult.error();
+  } finally {
+    db.close();
+  }
+}
+
+Future<RestorePlanResult> planRedo(String filePath, {String? basePath}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final target = paths.resolveFile(filePath);
+
+  final dmcDir = paths.dmcDirectory;
+  if (!await dmcDir.exists()) {
+    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+    return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
+  }
+
+  final db = DmcDatabase(paths.dbPath);
+  db.initialize();
+  final event = RestoreEventRepository(
+    db,
+  ).getLatestRedoSourceEvent(target.relativePath);
+  if (event == null || event.overwrittenSnapshotId == null) {
+    db.close();
+    print('[DMC] No recent undo found to redo for $filePath');
+    return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
+  }
+
+  final overwrittenSnapshot = db.getSnapshotById(event.overwrittenSnapshotId!);
   db.close();
+
+  if (overwrittenSnapshot == null ||
+      overwrittenSnapshot.filePath != target.relativePath) {
+    print('[DMC] No recent undo found to redo for $filePath');
+    return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
+  }
+
+  return planRestore(
+    filePath,
+    id: event.overwrittenSnapshotId,
+    basePath: basePath,
+  );
+}
+
+/// Restore a file to its previous state.
+Future<RestoreResult> restoreFile(
+  String filePath, {
+  int? id,
+  int? burstId,
+  String? taskName,
+  String? markName,
+  String? basePath,
+  bool dryRun = false,
+  String commandName = 'restore',
+}) async {
+  final selectedTargets = [
+    if (id != null) 'id',
+    if (burstId != null) 'burst',
+    if (taskName != null) 'task',
+    if (markName != null) 'mark',
+  ];
+  if (selectedTargets.length > 1) {
+    print('[DMC] Error: Use only one of --id, --burst, --task, or --mark.');
+    return RestoreResult.error();
+  }
+
+  if (burstId != null) {
+    return _restoreBurstSnapshots(
+      burstId,
+      commandName: commandName,
+      basePath: basePath,
+      dryRun: dryRun,
+    );
+  }
+
+  if (taskName != null) {
+    return _restoreTaskSnapshots(
+      taskName,
+      commandName: commandName,
+      basePath: basePath,
+      dryRun: dryRun,
+    );
+  }
+
+  if (markName != null) {
+    final paths = DmcPaths(basePath: basePath);
+    final dmcDir = paths.dmcDirectory;
+    if (!await dmcDir.exists()) {
+      print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+      return RestoreResult.error();
+    }
+
+    final db = DmcDatabase(paths.dbPath);
+    db.initialize();
+    final mark = db.getMarkByName(markName);
+    db.close();
+
+    if (mark == null) {
+      print('[DMC] Error: Mark "$markName" not found.');
+      return RestoreResult.error();
+    }
+
+    return _restoreBurstSnapshots(
+      mark.burstId,
+      commandName: commandName,
+      basePath: basePath,
+      dryRun: dryRun,
+    );
+  }
+
+  final planningResult = await planRestore(
+    filePath,
+    id: id,
+    basePath: basePath,
+  );
+  if (dryRun) {
+    return _previewRestorePlan(planningResult);
+  }
+
+  return _applyRestorePlan(planningResult, filePath, commandName);
+}
+
+/// Backwards-compatible alias for the existing restore behavior.
+Future<RestoreResult> undoFile(
+  String filePath, {
+  int? id,
+  int? burstId,
+  String? taskName,
+  String? markName,
+  String? basePath,
+  bool dryRun = false,
+}) {
+  return restoreFile(
+    filePath,
+    id: id,
+    burstId: burstId,
+    taskName: taskName,
+    markName: markName,
+    basePath: basePath,
+    dryRun: dryRun,
+    commandName: 'undo',
+  );
+}
+
+Future<RestoreResult> redoFile(
+  String filePath, {
+  int? burstId,
+  String? taskName,
+  String? markName,
+  String? basePath,
+  bool dryRun = false,
+}) async {
+  final selectedTargets = [
+    if (burstId != null) 'burst',
+    if (taskName != null) 'task',
+    if (markName != null) 'mark',
+  ];
+  if (selectedTargets.length > 1) {
+    print('[DMC] Error: Use only one of --burst, --task, or --mark.');
+    return RestoreResult.error();
+  }
+
+  if (burstId != null) {
+    return _redoBurstSnapshots(burstId, basePath: basePath, dryRun: dryRun);
+  }
+
+  if (taskName != null) {
+    return _redoTaskSnapshots(taskName, basePath: basePath, dryRun: dryRun);
+  }
+
+  if (markName != null) {
+    final paths = DmcPaths(basePath: basePath);
+    final dmcDir = paths.dmcDirectory;
+    if (!await dmcDir.exists()) {
+      print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+      return RestoreResult.error();
+    }
+
+    final db = DmcDatabase(paths.dbPath);
+    db.initialize();
+    final mark = db.getMarkByName(markName);
+    db.close();
+
+    if (mark == null) {
+      print('[DMC] Error: Mark "$markName" not found.');
+      return RestoreResult.error();
+    }
+
+    return _redoBurstSnapshots(
+      mark.burstId,
+      basePath: basePath,
+      dryRun: dryRun,
+    );
+  }
+
+  final planningResult = await planRedo(filePath, basePath: basePath);
+  if (dryRun) {
+    return _previewRestorePlan(planningResult);
+  }
+
+  return _applyRestorePlan(planningResult, filePath, 'redo');
 }
