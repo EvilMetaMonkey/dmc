@@ -16,5 +16,6 @@ export 'src/restore_events.dart';
 export 'src/snap.dart';
 export 'src/task.dart';
 export 'src/ui.dart';
+export 'src/version.dart';
 export 'src/watcher.dart';
 export 'src/workspace.dart';

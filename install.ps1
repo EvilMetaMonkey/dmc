@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 # Define our paths
-$sourceDir = Join-Path $PSScriptRoot 'build\dmc'
+$sourceDir = Join-Path $PSScriptRoot 'build\dmc\bundle'
 $binBase = 'C:\bin'
 $targetDir = Join-Path $binBase 'dmc'
 $targetBinDir = Join-Path $targetDir 'bin'

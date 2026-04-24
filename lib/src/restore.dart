@@ -7,6 +7,7 @@ import 'database.dart';
 import 'history_support.dart';
 import 'log.dart';
 import 'restore_events.dart';
+import 'snapshot_names.dart';
 import 'task.dart';
 import 'workspace.dart';
 
@@ -373,7 +374,16 @@ Future<RestorePlanResult> planRestore(
   String? basePath,
 }) async {
   final paths = DmcPaths(basePath: basePath);
-  final target = paths.resolveFile(filePath);
+  late final ResolvedFileTarget target;
+  try {
+    target = paths.resolveFile(filePath);
+  } on ArgumentError catch (e) {
+    print('[DMC] Error: ${e.message}');
+    return RestorePlanResult.error(
+      dbPath: paths.dbPath,
+      target: paths.resolveFileUnchecked(filePath),
+    );
+  }
 
   final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {
@@ -497,13 +507,14 @@ Future<int?> _captureCurrentSnapshotIdBeforeRestore(
     return latestSnapshot.id;
   }
 
-  final filename = p.basenameWithoutExtension(plan.targetFilePath);
-  final extension = p.extension(plan.targetFilePath);
-  final snapshotFilename = '${filename}_$timestamp$extension.bak';
-  final snapshotPath = p.join(
-    p.dirname(plan.snapshotFilePath!),
-    snapshotFilename,
+  final snapshotFilename = buildSnapshotFilename(
+    relativePath: plan.snapshot.target.relativePath,
+    timestamp: timestamp,
+    hash: currentHash,
   );
+  final snapshotsPath = p.join(p.dirname(db.dbPath), snapshotsDirName);
+  await Directory(snapshotsPath).create(recursive: true);
+  final snapshotPath = p.join(snapshotsPath, snapshotFilename);
 
   await targetFile.copy(snapshotPath);
   db.insertSnapshot(
@@ -583,7 +594,16 @@ Future<RestoreResult> _applyRestorePlan(
 
 Future<RestorePlanResult> planRedo(String filePath, {String? basePath}) async {
   final paths = DmcPaths(basePath: basePath);
-  final target = paths.resolveFile(filePath);
+  late final ResolvedFileTarget target;
+  try {
+    target = paths.resolveFile(filePath);
+  } on ArgumentError catch (e) {
+    print('[DMC] Error: ${e.message}');
+    return RestorePlanResult.error(
+      dbPath: paths.dbPath,
+      target: paths.resolveFileUnchecked(filePath),
+    );
+  }
 
   final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {

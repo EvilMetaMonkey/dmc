@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -5,6 +6,9 @@ import 'package:path/path.dart' as p;
 import 'workspace.dart';
 
 typedef DaemonState = ({bool hasPidFile, int? pid, bool isRunning});
+
+typedef DaemonPidMetadata =
+    ({int pid, String? executable, List<String> arguments});
 
 typedef SpawnDetachedProcess =
     Future<int> Function(
@@ -36,18 +40,60 @@ class DaemonPlatform {
 }
 
 Future<int?> readDaemonPid({String? basePath}) async {
+  final metadata = await readDaemonPidMetadata(basePath: basePath);
+  return metadata?.pid;
+}
+
+Future<DaemonPidMetadata?> readDaemonPidMetadata({String? basePath}) async {
   final paths = DmcPaths(basePath: basePath);
   if (!await paths.daemonPidFile.exists()) {
     return null;
   }
 
   final rawValue = (await paths.daemonPidFile.readAsString()).trim();
-  return int.tryParse(rawValue);
+  final legacyPid = int.tryParse(rawValue);
+  if (legacyPid != null) {
+    return (pid: legacyPid, executable: null, arguments: const <String>[]);
+  }
+
+  try {
+    final decoded = jsonDecode(rawValue);
+    if (decoded is! Map<String, dynamic>) return null;
+    final pid = decoded['pid'];
+    if (pid is! int) return null;
+    final executable = decoded['executable'];
+    final arguments = decoded['arguments'];
+    return (
+      pid: pid,
+      executable: executable is String ? executable : null,
+      arguments: arguments is List
+          ? arguments.whereType<String>().toList(growable: false)
+          : const <String>[],
+    );
+  } on FormatException {
+    return null;
+  }
 }
 
-Future<void> writeDaemonPid(int pid, {String? basePath}) {
+Future<void> writeDaemonPid(
+  int pid, {
+  String? basePath,
+  String? executable,
+  List<String>? arguments,
+}) {
   final paths = DmcPaths(basePath: basePath);
-  return paths.daemonPidFile.writeAsString('$pid\n');
+  if (executable == null && arguments == null) {
+    return paths.daemonPidFile.writeAsString('$pid\n');
+  }
+
+  return paths.daemonPidFile.writeAsString(
+    '${jsonEncode({
+      'pid': pid,
+      'executable': executable,
+      'arguments': arguments ?? const <String>[],
+      'started_at': DateTime.now().millisecondsSinceEpoch,
+    })}\n',
+  );
 }
 
 Future<void> clearDaemonPid({String? basePath}) async {
@@ -68,13 +114,18 @@ Future<DaemonState> getDaemonState({
     return (hasPidFile: false, pid: null, isRunning: false);
   }
 
-  final pid = await readDaemonPid(basePath: basePath);
-  if (pid == null) {
+  final metadata = await readDaemonPidMetadata(basePath: basePath);
+  if (metadata == null) {
     return (hasPidFile: true, pid: null, isRunning: false);
   }
 
-  final isRunning = await resolvedPlatform.isPidRunning(pid);
-  return (hasPidFile: true, pid: pid, isRunning: isRunning);
+  final pidIsRunning = await resolvedPlatform.isPidRunning(metadata.pid);
+  final commandMatches = _daemonCommandMatches(metadata);
+  return (
+    hasPidFile: true,
+    pid: metadata.pid,
+    isRunning: pidIsRunning && commandMatches,
+  );
 }
 
 Future<int> startDaemon({String? basePath, DaemonPlatform? platform}) async {
@@ -106,7 +157,12 @@ Future<int> startDaemon({String? basePath, DaemonPlatform? platform}) async {
     workingDirectory: paths.rootPath,
   );
 
-  await writeDaemonPid(pid, basePath: paths.rootPath);
+  await writeDaemonPid(
+    pid,
+    basePath: paths.rootPath,
+    executable: launch.executable,
+    arguments: launch.arguments,
+  );
   print('[DMC] Started watcher in background (PID: $pid).');
   return 0;
 }
@@ -161,6 +217,24 @@ Future<int> stopDaemon({String? basePath, DaemonPlatform? platform}) async {
   }
 
   return (executable: executable, arguments: ['watch']);
+}
+
+bool _daemonCommandMatches(DaemonPidMetadata metadata) {
+  if (metadata.executable == null) {
+    return true;
+  }
+
+  final launch = _buildWatchLaunchCommand();
+  return p.normalize(metadata.executable!) == p.normalize(launch.executable) &&
+      _listEquals(metadata.arguments, launch.arguments);
+}
+
+bool _listEquals(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
 }
 
 Future<int> _spawnDetachedProcess(

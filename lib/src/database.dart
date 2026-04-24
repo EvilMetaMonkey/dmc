@@ -27,6 +27,9 @@ class DmcDatabase {
   /// Initialize the database and create tables if they don't exist
   void initialize() {
     _db = sqlite3.open(dbPath);
+    _db!.execute('PRAGMA journal_mode = WAL');
+    _db!.execute('PRAGMA synchronous = NORMAL');
+    _db!.execute('PRAGMA busy_timeout = 5000');
 
     _db!.execute('''
       CREATE TABLE IF NOT EXISTS history (
@@ -542,20 +545,32 @@ class DmcDatabase {
     );
   }
 
-  List<({String snapshotPath, String hash})> getExpiredSnapshotRecords(
+  List<({int id, String snapshotPath, String hash})> getExpiredSnapshotRecords(
     Duration maxAge,
   ) {
     if (_db == null) return [];
 
     final cutoff = DateTime.now().subtract(maxAge).millisecondsSinceEpoch;
     final result = _db!.select(
-      'SELECT snapshot_path, hash FROM history WHERE timestamp < ?',
+      '''
+      SELECT id, snapshot_path, hash
+      FROM history
+      WHERE timestamp < ?
+        AND id NOT IN (
+          SELECT snapshot_id FROM restore_events
+          UNION
+          SELECT overwritten_snapshot_id
+          FROM restore_events
+          WHERE overwritten_snapshot_id IS NOT NULL
+        )
+      ''',
       [cutoff],
     );
 
     return result
         .map(
           (row) => (
+            id: row['id'] as int,
             snapshotPath: row['snapshot_path'] as String,
             hash: row['hash'] as String,
           ),
@@ -589,7 +604,20 @@ class DmcDatabase {
       }
     }
 
-    _db!.execute('DELETE FROM history WHERE timestamp < ?', [cutoff]);
+    _db!.execute(
+      '''
+      DELETE FROM history
+      WHERE timestamp < ?
+        AND id NOT IN (
+          SELECT snapshot_id FROM restore_events
+          UNION
+          SELECT overwritten_snapshot_id
+          FROM restore_events
+          WHERE overwritten_snapshot_id IS NOT NULL
+        )
+      ''',
+      [cutoff],
+    );
     return expiredRows.length;
   }
 }

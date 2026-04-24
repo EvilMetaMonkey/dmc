@@ -27,7 +27,9 @@ class DmcPaths {
   DmcPaths._(this.rootPath);
 
   factory DmcPaths({String? basePath}) {
-    final resolvedBasePath = p.normalize(basePath ?? Directory.current.path);
+    final resolvedBasePath = p.normalize(
+      p.absolute(basePath ?? Directory.current.path),
+    );
     return DmcPaths._(resolvedBasePath);
   }
 
@@ -52,6 +54,20 @@ class DmcPaths {
   File get daemonPidFile => File(daemonPidPath);
 
   ResolvedFileTarget resolveFile(String filePath) {
+    final target = resolveFileUnchecked(filePath);
+    if (!p.isWithin(rootPath, target.absolutePath) &&
+        p.normalize(target.absolutePath) != p.normalize(rootPath)) {
+      throw ArgumentError.value(
+        filePath,
+        'filePath',
+        'Path must be inside the DMC workspace: $rootPath',
+      );
+    }
+
+    return target;
+  }
+
+  ResolvedFileTarget resolveFileUnchecked(String filePath) {
     final absolutePath = p.isAbsolute(filePath)
         ? p.normalize(filePath)
         : p.normalize(p.join(rootPath, filePath));

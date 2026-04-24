@@ -6,6 +6,7 @@ import 'database.dart';
 import 'diff.dart';
 import 'log.dart';
 import 'restore.dart';
+import 'version.dart';
 import 'workspace.dart';
 
 const int _defaultHistoryLimit = 25;
@@ -271,7 +272,8 @@ class DmcUiController {
         return DmcUiTransition(state: _state);
       case DmcUiInput.enter:
         final item = _state.selectedMenuItem;
-        if (item.action == DmcUiMenuAction.launchDashboard) {
+        if (item.action == DmcUiMenuAction.launchDashboard ||
+            item.action == DmcUiMenuAction.viewHistory) {
           _state = _state.copyWith(
             view: DmcUiView.dashboard,
             clearStatusMessage: true,
@@ -282,7 +284,7 @@ class DmcUiController {
           return DmcUiTransition(state: _state, shouldExit: true);
         }
         _state = _state.copyWith(
-          statusMessage: '${item.label} is not wired from the splash page yet.',
+          statusMessage: _splashActionMessage(item.action),
         );
         return DmcUiTransition(state: _state);
       case DmcUiInput.quit:
@@ -326,6 +328,24 @@ class DmcUiController {
       case DmcUiInput.quit:
         return DmcUiTransition(state: _state, shouldExit: true);
     }
+  }
+}
+
+String _splashActionMessage(DmcUiMenuAction action) {
+  switch (action) {
+    case DmcUiMenuAction.startDaemon:
+      return 'Exit UI and run `dmc start` to launch the watcher daemon.';
+    case DmcUiMenuAction.statusVaults:
+      return 'Exit UI and run `dmc status` or `dmc doctor` for vault health.';
+    case DmcUiMenuAction.fastRestore:
+      return 'Open history, select a snapshot, and press R to restore safely.';
+    case DmcUiMenuAction.configure:
+      return 'Edit .dmc/config.json or ~/.dmcconfig, then restart the watcher.';
+    case DmcUiMenuAction.viewHistory:
+    case DmcUiMenuAction.launchDashboard:
+      return 'Opening history.';
+    case DmcUiMenuAction.quit:
+      return 'Quit.';
   }
 }
 
@@ -505,7 +525,7 @@ void _renderSplash(Console console, DmcUiState state) {
   final compact = width < 110 || height < 36;
 
   // ── Header ──────────────────────────────────────────────────────────
-  final headerText = 'DMC 1.4.1 (DE LOREAN MOTOR COMPANY)';
+  final headerText = 'DMC $dmcVersion (DE LOREAN MOTOR COMPANY)';
   final headerCol = ((width - headerText.length) ~/ 2).clamp(2, width - 2);
   _at(console, 1, 2, '─' * (headerCol - 3), fg: ConsoleColor.brightBlack);
   _at(console, 1, headerCol, headerText, fg: ConsoleColor.yellow);
@@ -789,7 +809,7 @@ void _header(Console console, int width, String basePath, int count) {
     console,
     1,
     2,
-    'DMC 1.4.1',
+    'DMC $dmcVersion',
     fg: ConsoleColor.yellow,
     bg: ConsoleColor.brightBlack,
   );
@@ -1098,7 +1118,7 @@ void _menu(
     );
   }
 
-  // Status message (e.g. "not wired yet")
+  // Status message (for safe action guidance and restore feedback)
   final msgRow = useColumns ? top + 5 : top + 9;
   if (state.statusMessage != null) {
     _center(

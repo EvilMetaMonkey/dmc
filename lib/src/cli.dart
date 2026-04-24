@@ -11,6 +11,7 @@ import 'snap.dart';
 import 'status.dart';
 import 'task.dart';
 import 'ui.dart';
+import 'version.dart';
 import 'watcher.dart';
 
 ArgParser _addPreviewFlags(ArgParser command) {
@@ -303,6 +304,11 @@ Future<int> _runDiffCommand(ArgResults command) async {
 /// Parse command-line arguments and execute the appropriate command
 Future<int> runCli(List<String> args) async {
   final parser = ArgParser();
+  parser.addFlag(
+    'version',
+    negatable: false,
+    help: 'Print the current version',
+  );
   parser.addCommand('init');
   parser.addCommand('start');
   parser.addCommand('stop');
@@ -340,6 +346,12 @@ Future<int> runCli(List<String> args) async {
   diffCommand.addOption('burst', help: 'Specific burst ID to target');
 
   final results = parser.parse(args);
+
+  if (results['version'] as bool) {
+    print('dmc version $dmcVersion');
+    return 0;
+  }
+
   final command = results.command;
 
   if (command == null) {

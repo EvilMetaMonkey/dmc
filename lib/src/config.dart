@@ -53,12 +53,12 @@ Future<DmcConfig> loadDmcConfig({String? basePath, String? homePath}) async {
   final mergedConfig = {...globalConfig, ...localConfig};
 
   return DmcConfig(
-    retentionHours: _readIntSetting(
+    retentionHours: _readPositiveIntSetting(
       mergedConfig,
       'retention_hours',
       defaultRetentionHours,
     ),
-    maxFileSizeKb: _readIntSetting(
+    maxFileSizeKb: _readPositiveIntSetting(
       mergedConfig,
       'max_file_size_kb',
       defaultMaxFileSizeKb,
@@ -83,22 +83,28 @@ Future<Map<String, Object?>> _readConfigFile(File file) async {
   return decoded;
 }
 
-int _readIntSetting(Map<String, Object?> config, String key, int defaultValue) {
+int _readPositiveIntSetting(
+  Map<String, Object?> config,
+  String key,
+  int defaultValue,
+) {
   final rawValue = config[key];
   if (rawValue == null) {
     return defaultValue;
   }
 
+  int? value;
   if (rawValue is int) {
-    return rawValue;
+    value = rawValue;
+  } else if (rawValue is String) {
+    value = int.tryParse(rawValue);
   }
 
-  if (rawValue is String) {
-    final parsedValue = int.tryParse(rawValue);
-    if (parsedValue != null) {
-      return parsedValue;
-    }
+  if (value == null || value <= 0) {
+    throw FormatException(
+      'Invalid value for "$key". Expected a positive integer.',
+    );
   }
 
-  throw FormatException('Invalid value for "$key". Expected an integer.');
+  return value;
 }

@@ -59,6 +59,19 @@ void main() {
       expect(target.workingPath, p.join(tempDir.path, 'lib', 'main.dart'));
       expect(target.absolutePath, p.join(tempDir.path, 'lib', 'main.dart'));
     });
+
+    test('rejects paths outside the workspace root', () {
+      final paths = DmcPaths(basePath: tempDir.path);
+
+      expect(
+        () => paths.resolveFile(p.join('..', 'outside.txt')),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => paths.resolveFile(p.join(tempDir.parent.path, 'outside.txt')),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
   });
 
   group('Snapshot selection', () {

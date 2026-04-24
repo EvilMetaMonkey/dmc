@@ -177,7 +177,12 @@ Future<DiffOutput> buildDiffOutput(
     );
   }
 
-  final target = paths.resolveFile(filePath);
+  late final ResolvedFileTarget target;
+  try {
+    target = paths.resolveFile(filePath);
+  } on ArgumentError catch (e) {
+    return DiffOutput(hadError: true, output: '[DMC] Error: ${e.message}');
+  }
 
   final db = DmcDatabase(paths.dbPath);
   db.initialize();

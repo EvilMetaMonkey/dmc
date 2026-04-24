@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-intel:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Get dependencies
+        run: dart pub get
+      - name: Build CLI bundle
+        run: dart build cli -o build/dmc
+      - name: Package
+        run: |
+          mv build/dmc/bundle build/dmc/dmc
+          tar czf "build/dmc-${GITHUB_REF_NAME}-macos-x86_64.tar.gz" -C build/dmc dmc
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: build/dmc-*.tar.gz
+
+  build-macos-arm:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Get dependencies
+        run: dart pub get
+      - name: Build CLI bundle
+        run: dart build cli -o build/dmc
+      - name: Package
+        run: |
+          mv build/dmc/bundle build/dmc/dmc
+          tar czf "build/dmc-${GITHUB_REF_NAME}-macos-arm64.tar.gz" -C build/dmc dmc
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: build/dmc-*.tar.gz
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Get dependencies
+        run: dart pub get
+      - name: Build CLI bundle
+        run: dart build cli -o build/dmc
+      - name: Package
+        run: |
+          mv build/dmc/bundle build/dmc/dmc
+          tar czf "build/dmc-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" -C build/dmc dmc
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: build/dmc-*.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Get dependencies
+        run: dart pub get
+      - name: Build CLI bundle
+        run: dart build cli -o build/dmc
+      - name: Package
+        shell: pwsh
+        run: |
+          Rename-Item -Path build\dmc\bundle -NewName dmc
+          Compress-Archive -Path build\dmc\dmc -DestinationPath "build\dmc-${env:GITHUB_REF_NAME}-windows-x86_64.zip"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: build/dmc-*.zip
+
+  release:
+    needs: [build-macos-intel, build-macos-arm, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

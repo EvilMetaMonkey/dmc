@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'config.dart';
 import 'database.dart';
 import 'ignore.dart';
+import 'snapshot_names.dart';
 import 'task.dart';
 import 'workspace.dart';
 
@@ -168,7 +169,7 @@ class DmcWatcher {
     );
 
     if (relativePath == '..' || relativePath.startsWith('..${p.separator}')) {
-      return false;
+      return true;
     }
 
     for (final rule in ignoreRules) {
@@ -247,9 +248,11 @@ class DmcWatcher {
       }
 
       // Generate snapshot filename
-      final filename = p.basenameWithoutExtension(filePath);
-      final extension = p.extension(filePath);
-      final snapshotFilename = '${filename}_$timestamp$extension.bak';
+      final snapshotFilename = buildSnapshotFilename(
+        relativePath: relativePath,
+        timestamp: timestamp,
+        hash: hash,
+      );
       final snapshotPath = p.join(snapshotsPath, snapshotFilename);
 
       // Copy file to snapshots directory
@@ -274,7 +277,7 @@ class DmcWatcher {
 }
 
 /// Start watching the target directory for changes
-Future<void> watchDmc({String? basePath}) async {
+Future<void> watchDmc({String? basePath, Future<void>? keepAlive}) async {
   final paths = DmcPaths(basePath: basePath);
 
   // Verify DMC is initialized
@@ -315,7 +318,7 @@ Future<void> watchDmc({String? basePath}) async {
   );
 
   // Handle shutdown signals
-  ProcessSignal.sigint.watch().listen((signal) {
+  final signalSubscription = ProcessSignal.sigint.watch().listen((signal) {
     print('\n[DMC] Shutting down...');
     watcher.stop();
     db.close();
@@ -325,8 +328,13 @@ Future<void> watchDmc({String? basePath}) async {
   // Start watching
   watcher.start();
 
-  // Keep the process running
-  await Future<void>.delayed(Duration(days: 1));
+  try {
+    await (keepAlive ?? Completer<void>().future);
+  } finally {
+    await signalSubscription.cancel();
+    watcher.stop();
+    db.close();
+  }
 }
 
 Future<bool> _isProbablyBinaryFile(File file) async {

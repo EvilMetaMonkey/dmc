@@ -261,6 +261,26 @@ void main() {
       db.close();
     });
 
+    test('initialize enables SQLite WAL mode and a busy timeout', () async {
+      final dbPath = p.join(tempDir.path, '.dmc', 'dmc.db');
+
+      await initDmc(basePath: tempDir.path);
+
+      final db = DmcDatabase(dbPath);
+      db.initialize();
+      final journalMode = db.db
+          .select('PRAGMA journal_mode')
+          .first['journal_mode'];
+      final busyTimeout = db.db
+          .select('PRAGMA busy_timeout')
+          .first['timeout'];
+
+      expect('$journalMode'.toLowerCase(), 'wal');
+      expect(busyTimeout, greaterThanOrEqualTo(5000));
+
+      db.close();
+    });
+
     test('initDmc creates all required components', () async {
       await initDmc(basePath: tempDir.path);
 
@@ -350,6 +370,24 @@ dist/
       expect(config.maxFileSizeKb, 1024);
       expect(config.hasGlobalConfig, isTrue);
       expect(config.hasLocalConfig, isTrue);
+    });
+
+    test('loadDmcConfig rejects unsafe retention and max file size values', () async {
+      await initDmc(basePath: tempDir.path);
+
+      final configFile = File(p.join(tempDir.path, '.dmc', 'config.json'));
+
+      await configFile.writeAsString('{"retention_hours":0}');
+      expect(
+        loadDmcConfig(basePath: tempDir.path, homePath: tempDir.path),
+        throwsA(isA<FormatException>()),
+      );
+
+      await configFile.writeAsString('{"max_file_size_kb":0}');
+      expect(
+        loadDmcConfig(basePath: tempDir.path, homePath: tempDir.path),
+        throwsA(isA<FormatException>()),
+      );
     });
   });
 
@@ -457,6 +495,50 @@ dist/
       expect(alphaLog.burstId, isNotNull);
       expect(betaLog.burstId, isNotNull);
       expect(alphaLog.burstId, isNot(betaLog.burstId));
+
+      db.close();
+    });
+
+    test('same-basename files changed at the same timestamp get unique snapshots', () async {
+      await initDmc(basePath: tempDir.path);
+
+      final db = DmcDatabase(p.join(tempDir.path, '.dmc', 'dmc.db'));
+      db.initialize();
+
+      final alphaDir = Directory(p.join(tempDir.path, 'alpha'));
+      final betaDir = Directory(p.join(tempDir.path, 'beta'));
+      await alphaDir.create();
+      await betaDir.create();
+      final alphaFile = File(p.join(alphaDir.path, 'index.dart'));
+      final betaFile = File(p.join(betaDir.path, 'index.dart'));
+      await alphaFile.writeAsString('alpha');
+      await betaFile.writeAsString('beta');
+
+      final watcher = DmcWatcher(
+        targetPath: tempDir.path,
+        database: db,
+        snapshotsPath: p.join(tempDir.path, '.dmc', 'snapshots'),
+        ignoreRules: const [],
+        maxFileSizeBytes: defaultMaxFileSizeKb * 1024,
+        nowMilliseconds: () => 1234,
+      );
+
+      await watcher.captureFileNow(alphaFile.path);
+      await watcher.captureFileNow(betaFile.path);
+
+      final logs = db.getRecentHistory(limit: 10);
+      final snapshotPaths = logs.map((log) => log.snapshotPath).toSet();
+
+      expect(logs, hasLength(2));
+      expect(snapshotPaths, hasLength(2));
+      for (final log in logs) {
+        expect(
+          await File(
+            p.join(tempDir.path, '.dmc', 'snapshots', log.snapshotPath),
+          ).exists(),
+          isTrue,
+        );
+      }
 
       db.close();
     });
@@ -619,6 +701,46 @@ dist/
 
       expect(prunedCount, 1);
       expect(db.getRecentHistory(limit: 10), isEmpty);
+
+      db.close();
+    });
+
+    test('pruneOldSnapshots keeps history referenced by restore audit events', () async {
+      await initDmc(basePath: tempDir.path);
+
+      final snapshotName = 'old_restore_source.bak';
+      final snapshotPath = p.join(
+        tempDir.path,
+        '.dmc',
+        'snapshots',
+        snapshotName,
+      );
+      await File(snapshotPath).writeAsString('old');
+
+      final db = DmcDatabase(p.join(tempDir.path, '.dmc', 'dmc.db'));
+      db.initialize();
+      final snapshotId = insertSnapshotAndGetId(
+        db,
+        filePath: 'notes.txt',
+        snapshotPath: snapshotName,
+        timestamp: DateTime.now()
+            .subtract(const Duration(days: 10))
+            .millisecondsSinceEpoch,
+        hash: hashText('old'),
+      );
+      db.insertRestoreEvent(
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        command: 'undo',
+        filePath: 'notes.txt',
+        snapshotId: snapshotId,
+        success: true,
+      );
+
+      final prunedCount = await db.pruneOldSnapshots(const Duration(hours: 48));
+
+      expect(prunedCount, 0);
+      expect(await File(snapshotPath).exists(), isTrue);
+      expect(db.getSnapshotById(snapshotId), isNotNull);
 
       db.close();
     });
@@ -822,6 +944,28 @@ dist/
         await File(p.join(tempDir.path, '.dmc', 'daemon.pid')).exists(),
         isTrue,
       );
+    });
+
+    test('daemon state treats pid files for a different command as stale', () async {
+      await initDmc(basePath: tempDir.path);
+
+      final fakeDaemon = FakeDaemonProcessState();
+      fakeDaemon.runningPids.add(4242);
+      await writeDaemonPid(
+        4242,
+        basePath: tempDir.path,
+        executable: '/usr/bin/other',
+        arguments: const ['not-dmc'],
+      );
+
+      final state = await getDaemonState(
+        basePath: tempDir.path,
+        platform: fakeDaemon.platform,
+      );
+
+      expect(state.hasPidFile, isTrue);
+      expect(state.pid, 4242);
+      expect(state.isRunning, isFalse);
     });
 
     test('showStatus reports watcher running and stopped', () async {
@@ -1457,6 +1601,48 @@ dist/
           ),
           isTrue,
         );
+      },
+    );
+
+    test(
+      'undoFile restores to a tombstone while preserving the overwritten state for redo',
+      () async {
+        await initDmc(basePath: tempDir.path);
+
+        final currentFile = File(p.join(tempDir.path, 'notes.txt'));
+        await currentFile.writeAsString('alpha beta');
+
+        final db = DmcDatabase(p.join(tempDir.path, '.dmc', 'dmc.db'));
+        db.initialize();
+        final tombstoneId = insertSnapshotAndGetId(
+          db,
+          filePath: 'notes.txt',
+          snapshotPath: tombstoneSnapshotPath,
+          timestamp: DateTime.now()
+              .subtract(const Duration(minutes: 1))
+              .millisecondsSinceEpoch,
+          hash: tombstoneHash,
+        );
+        db.close();
+
+        final undoResult = await undoFile(
+          'notes.txt',
+          basePath: tempDir.path,
+          id: tombstoneId,
+        );
+
+        expect(undoResult.hadError, isFalse);
+        expect(await currentFile.exists(), isFalse);
+
+        final undoEvents = loadRestoreEvents(tempDir.path);
+        expect(undoEvents, hasLength(1));
+        expect(undoEvents.first.overwrittenSnapshotId, isNotNull);
+
+        final redoResult = await redoFile('notes.txt', basePath: tempDir.path);
+
+        expect(redoResult.hadError, isFalse);
+        expect(await currentFile.exists(), isTrue);
+        expect(await currentFile.readAsString(), 'alpha beta');
       },
     );
 
@@ -2240,8 +2426,10 @@ dist/
         db.close();
 
         var code = -1;
+        late String expectedTargetPath;
         final output = await capturePrints(
           () => withCurrentDirectory(tempDir.path, () async {
+            expectedTargetPath = p.join(Directory.current.path, 'notes.txt');
             code = await runCli(['restore', 'notes.txt', '--dry-run']);
           }),
         );
@@ -2250,7 +2438,7 @@ dist/
         expect(code, 0);
         expect(output, contains('[DMC] Restore preview'));
         expect(output, contains('Target snapshot ID: $previewSnapshotId'));
-        expect(output, contains('Target file path: ${currentFile.path}'));
+        expect(output, contains('Target file path: $expectedTargetPath'));
         expect(output, contains('Restore possible: yes'));
         expect(output.any((line) => line.contains('\x1B[31m')), isTrue);
         expect(output.any((line) => line.contains('\x1B[32m')), isTrue);

@@ -44,6 +44,44 @@ void main() {
       expect(controller.state.selectedEntry?.filePath, 'alpha.txt');
     });
 
+    test('history splash action opens the dashboard', () {
+      final controller = DmcUiController([
+        const DmcUiHistoryEntry(
+          snapshotId: 1,
+          filePath: 'alpha.txt',
+          snapshotPath: 'alpha_1.bak',
+          timestamp: 100,
+          burstId: 10,
+        ),
+      ]);
+
+      controller.handleInput(DmcUiInput.down);
+      controller.handleInput(DmcUiInput.down);
+      final transition = controller.handleInput(DmcUiInput.enter);
+
+      expect(transition.shouldExit, isFalse);
+      expect(controller.state.view, DmcUiView.dashboard);
+      expect(controller.state.selectedEntry?.filePath, 'alpha.txt');
+    });
+
+    test('non-dashboard splash actions provide actionable guidance', () {
+      final controller = DmcUiController([
+        const DmcUiHistoryEntry(
+          snapshotId: 1,
+          filePath: 'alpha.txt',
+          snapshotPath: 'alpha_1.bak',
+          timestamp: 100,
+          burstId: 10,
+        ),
+      ]);
+
+      controller.handleInput(DmcUiInput.enter);
+
+      expect(controller.state.view, DmcUiView.splash);
+      expect(controller.state.statusMessage, contains('dmc start'));
+      expect(controller.state.statusMessage, isNot(contains('not wired')));
+    });
+
     test(
       'dashboard still supports selection, restore action, and escape back',
       () {
@@ -135,11 +173,11 @@ void main() {
       expect(
         art.map((line) => line.trimRight()).toList(),
         equals([
-          r"                    ┌──────────────┬──────────────┐",
-          r"               ┌────┤░░░░░░░░░░░░░│░░░░░░░░░░░░░├────┐",
-          r"            ┌──┤▒▒│░░╲         │         ╱░░│▒▒├──┐",
-          r"          ╭─┤▒▒│▒▒│░░│   ┌─────┴─────┐   │░░│▒▒│▒▒├─╮",
-          r"        ╱  │▒▒│▒▒│░░│   │ ┌──────┐ │   │░░│▒▒│▒▒│  ╲",
+          r"                   ┌──────────────┬──────────────┐",
+          r"              ┌────┤░░░░░░░░░░░░░│░░░░░░░░░░░░░├────┐",
+          r"           ┌──┤▒▒│░░╲         │         ╱░░│▒▒├──┐",
+          r"         ╭─┤▒▒│▒▒│░░│   ┌─────┴─────┐   │░░│▒▒│▒▒├─╮",
+          r"       ╱  │▒▒│▒▒│░░│   │ ┌──────┐ │   │░░│▒▒│▒▒│  ╲",
           r"       │   │▒▒│▒▒│░░│   │ │      │ │   │░░│▒▒│▒▒│   │",
           r"       │   │▒▒│▒▒│░░│   │ │ DMC  │ │   │░░│▒▒│▒▒│   │",
           r"       │   │▒▒│▒▒│░░│   │ └──────┘ │   │░░│▒▒│▒▒│   │",
