@@ -25,7 +25,13 @@ I built this because coding with AI agents (Claude, Cursor, Aider) is fast, but 
 ```bash
 brew tap EvilMetaMonkey/dmc
 brew install dmc
+dmc --version
 ```
+
+If macOS prints disk-profile commands like `start <mount>` or `list`
+instead of `dmc version ...`, your shell is running Apple's system
+`/usr/bin/dmc`. Refresh zsh's command cache with `rehash`, then confirm
+`command -v dmc` points at `/opt/homebrew/bin/dmc`.
 
 ### Windows
 
