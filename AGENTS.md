@@ -14,30 +14,20 @@ dmc is for recovering from risky or broken AI-assisted edits before commit.
 ---
 
 ## Current Phase Status
-- Phase 1: Init flow complete.
-- Phase 2: Watcher flow complete.
-- Phase 3: Restore/log flow complete.
-- Phase 4: Global Windows compilation and installation complete.
-- Phase 5: Polish complete (`.dmcignore` support and retention pruning added).
-- Phase 6: Diff complete (`dmc diff <file>` added with ANSI-colored output).
-- Phase 7: Deep Undo complete (`log` shows IDs and `undo`/`diff` accept `--id`).
+The current numbering refers to the checkpoint hardening plan, replacing the original feature milestones.
 
-### Next Planned Phases
-- Phase 8: Trust foundation improvements
-  - `restore` alias
-  - dry-run / preview restore
-  - restore audit trail
-  - redo
-  - `status`
-  - `doctor`
-  - configurable retention
-  - binary file detection
-  - max file size support
-  - watcher hardening
-- Phase 9: Burst-level recovery
-- Phase 10: Task/session-aware recovery
-- Phase 11: Agent/source-aware metadata
-- Phase 12: Cross-tool integrations and polish
+- Hardening Phase 1: implemented locally; snapshot integrity, migrations, preimages, and retention protection. See `docs/PHASE1-IMPLEMENTATION.md`.
+- Hardening Phase 2: implemented locally for review; baseline/readiness, event reconciliation, graceful drain, path/ignore safety, authenticated daemon control, and CI. See `docs/PHASE2-IMPLEMENTATION.md` for evidence and remaining platform gates.
+- Hardening Phase 3: implemented locally for review; explicit begin/close manifests, change classification, exclusions/issues, retention pins, show/diff/release, and versioned JSON. See `docs/PHASE3-IMPLEMENTATION.md`.
+- Hardening Phase 4: implemented locally for review; conflict-aware checkpoint restore/redo, durable operation journals, per-file atomic replacement, recovery storage, and resume/rollback. See `docs/PHASE4-IMPLEMENTATION.md`.
+- Hardening Phase 5: implemented locally for review; finalized Haven JSON schema 1, schema negotiation, checkpoint listing and operation discovery, compiled reference harness, and forced-cancellation recovery tests. See `docs/PHASE5-IMPLEMENTATION.md` and `docs/HAVEN-INTEGRATION.md`.
+- Existing CLI features include restore/undo/redo, previews, audit history, status/doctor, configuration, bursts, tasks, marks, manual snap, GC, and terminal UI.
+- Current version: `1.1.0-dev.5.1`, an unreleased development preview with additive recovery preview. Passing local tests is not a public-release verdict. Phase 6 remains separate.
+
+### Next Planned Phases (not yet implemented)
+- Phase 6: distribution, documentation, platform and release gates.
+
+Legacy bursts, tasks, marks, and `snap` are not complete project checkpoints. Preserve their documented meaning. Do not proceed into another phase without the user's authorization.
 
 ---
 
@@ -90,13 +80,22 @@ The most important product qualities are:
 - DMC working directory: `.dmc/`
 - Snapshots folder: `.dmc/snapshots/`
 - Database file: `.dmc/dmc.db`
-- Current history schema fields: `id`, `file_path`, `snapshot_path`, `timestamp`, `hash`
+- Schema version: 3 (`PRAGMA user_version`); history, marks, and restore events retain their legacy meanings. Checkpoint operation and per-file journal tables are additive and foreign-key constrained.
+- One checkpoint may be `creating`, `open`, or `closing`. `invalid`, `closed`, and `released` checkpoints do not block a new begin. Explicit release can abandon an interrupted state.
+- Begin and close each scan and verify eligible file state. Policy changes between them invalidate close. A rename is represented as deletion plus creation.
+- Manifest and operation references pin history until explicit release. Release is blocked while an operation is incomplete, then clears snapshot IDs while retaining hashes, modes, classifications, issues, and audit metadata.
+- Machine envelope schema and checkpoint manifest schema are version 1. JSON mode writes exactly one JSON object to stdout. Every envelope includes the DMC version, exit code, command, canonical workspace identity, data, warnings, and errors. `--schema-version 1` lets Haven reject an incompatible executable before work begins.
+- Checkpoint restore/redo previews by default and requires `--apply`. Never route checkpoint recovery through legacy burst/task/mark semantics. Stop the watcher and all writers before apply.
+- An incomplete operation must be handled with `checkpoint recover <id> --resume|--rollback`; status and doctor expose these journals.
+- Add `--preview` to inspect recovery targets and conflicts without changing the workspace or journal. Gate clients on `features.operationRecoveryPreview`. See `docs/RECOVERY-PREVIEW.md`.
 - Default watcher ignore rules: `.git`, `.dmc`, `.dart_tool`, `build`, `node_modules`
-- Optional user ignore file: `.dmcignore`
-- `.dmcignore` is loaded once when `dmc watch` starts
-- Empty lines and `#` comments in `.dmcignore` are ignored
+- Root `.gitignore` and `.dmcignore` are loaded once when the watcher starts; restart after policy changes.
+- Ignore support is an explicit subset: names, root anchoring, directory patterns, `*`, `**`, and `?`. Reject negation, character classes, Git escapes, and nested `.gitignore` in scanned directories; do not imply full Git compatibility.
+- Empty lines and `#` comments are ignored. Scanning prunes ignored directories before descent and excludes all links below the root.
 - Debounce delay: `500ms`
-- Current retention policy default: `48` hours, but this is expected to become configurable
+- Retention default: `168` hours; max file size default: `2048` KiB. Project `.dmc/config.json` overrides global `~/.dmcconfig`.
+- Cleanup runs only through explicit `gc`, never automatically on watcher startup. Mark/audit references pin history; expired unprotected baselines can still be removed.
+- `init` adds `.dmc/.gitignore` to exclude vault contents from Git. Vaults contain raw historical bytes; do not collect them as routine diagnostics.
 - `dmc log` shows snapshot IDs for historical targeting
 - `dmc diff <file>` compares the working file to its latest snapshot and prints ANSI-colored additions/deletions
 - `dmc undo --id <id> <file>` and `dmc diff --id <id> <file>` target exact historical snapshots
@@ -138,6 +137,11 @@ These rules are critical because dmc is a recovery tool.
 ---
 
 ## File Watching Principles
+- Await watcher start before reporting readiness; subscribe and queue events during baseline capture.
+- Await stop and pending work before closing the database. Reconcile on restart and periodically while running; never claim to recover unseen intermediate versions.
+- Use the shared path validator and snapshot service for file operations. Links below the workspace root, including vault links, are not supported.
+- Only the authenticated loopback control endpoint may request background shutdown. A saved PID is not ownership; never signal an arbitrary PID from metadata.
+- Surface capture/scan/watch errors as degraded protection through status/doctor.
 - Preserve the current per-file debounce concept unless explicitly redesigning it.
 - Be conservative when handling duplicate events, rapid write bursts, and atomic-save patterns.
 - Avoid creating noisy duplicate snapshots.
@@ -226,52 +230,11 @@ When implementing a feature:
 ---
 
 ## Near-Term Build Priorities
-Implement in roughly this order:
+1. Review Phase 5 and run the configured platform matrix before claiming support for each platform.
+2. Connect the real Haven process controller to the documented schema 1 contract without reading DMC's SQLite database.
+3. Complete Phase 6 and validate an invited standalone trial with exact tested bundles, licensing/distribution decisions, and honest exclusions.
 
-1. Trust foundation
-   - `restore` alias
-   - dry-run / preview restore
-   - restore audit trail
-   - redo
-   - `status`
-   - `doctor`
-   - configurable retention
-   - binary detection
-   - max file size
-   - watcher hardening
-
-2. Visibility improvements
-   - richer `log`
-   - better status/reporting
-   - restore metadata display
-
-3. Burst-level recovery
-   - burst model
-   - burst assignment
-   - `log --bursts`
-   - `diff --burst`
-   - `undo/restore --burst`
-   - `redo --burst`
-
-4. Task/session-aware recovery
-   - `task start`
-   - `task end`
-   - `log --tasks`
-   - `undo/restore --task`
-   - `redo --task`
-   - marks/bookmarks
-
-5. Agent-aware recovery
-   - source metadata
-   - manual vs agent inference
-   - `log --by-agent`
-
-6. Scale/polish
-   - explicit GC
-   - storage caps
-   - content-addressed storage
-   - interactive history
-   - docs/help improvements
+Use `docs/TESTER-READINESS-AUDIT.md` as the original audit and the Phase 2/3 handoffs as current implementation addenda. Do not treat historical findings already addressed as fresh reproductions.
 
 ---
 
@@ -283,12 +246,25 @@ Implement in roughly this order:
 - `dart run bin/dmc.dart undo --id <snapshot-id> <file>`
 - `dart run bin/dmc.dart diff <file>`
 - `dart run bin/dmc.dart diff --id <snapshot-id> <file>`
+- `dart run bin/dmc.dart checkpoint begin --label "<label>" --source manual`
+- `dart run bin/dmc.dart checkpoint close <checkpoint-id>`
+- `dart run bin/dmc.dart checkpoint list --json --schema-version 1`
+- `dart run bin/dmc.dart checkpoint show <checkpoint-id>`
+- `dart run bin/dmc.dart checkpoint restore <checkpoint-id> --dry-run`
+- `dart run bin/dmc.dart checkpoint restore <checkpoint-id> --apply`
+- `dart run bin/dmc.dart checkpoint redo <checkpoint-id> --apply`
+- `dart run bin/dmc.dart checkpoint recover <operation-id> --resume`
+- `dart run bin/dmc.dart checkpoint diff <checkpoint-id>`
+- `dart run bin/dmc.dart checkpoint release <checkpoint-id>`
+- `dart run bin/dmc.dart capabilities --json`
 - `dart test`
 - `dart analyze`
-- `dart compile exe bin/dmc.dart -o dmc.exe`
+- `dart run tool/check_analyzer.dart` (CI gate; explicitly allows only the pre-existing `_shiftArtLineLeft` UI warning)
+- `dart build cli -o build/dmc`
+- `dart run tool/smoke_bundle.dart build/dmc/bundle/bin/dmc` (append `.exe` on Windows)
 
-### Planned Commands
-These may not all exist yet, but new work should be compatible with them:
+### Additional Existing Commands
+Preserve these CLI routes and their documented legacy meanings:
 - `dmc restore <file>`
 - `dmc redo <file>`
 - `dmc status`
@@ -311,14 +287,17 @@ These may not all exist yet, but new work should be compatible with them:
 ---
 
 ## Windows Global Install
-- Compile: `dart compile exe bin/dmc.dart -o dmc.exe`
+- Build the full native-assets bundle: `dart build cli -o build/dmc`
+- Test it: `dart run tool/smoke_bundle.dart build/dmc/bundle/bin/dmc.exe`
 - Install: `.\install.ps1`
 
 Installer behavior:
 - Ensures `C:\bin` exists
-- Moves `dmc.exe` to `C:\bin\dmc.exe`
-- Adds `C:\bin` to persistent user `PATH` if missing
+- Removes an existing `C:\bin\dmc` installation, then moves `build\dmc\bundle` there; this is not an atomic upgrade with rollback
+- Adds `C:\bin\dmc\bin` to persistent user `PATH` if missing
 - Instructs user to restart terminal
+
+For trials, prefer keeping the full extracted bundle in a separate folder. Never distribute only the EXE: keep its adjacent `lib` directory. Installer/upgrade safety still needs a later release pass.
 
 ---
 
