@@ -16,6 +16,15 @@ Future<void> initDmc({String? basePath}) async {
     await dmcDir.create(recursive: true);
     print('Created $dmcDirName/ directory');
   }
+  // Exclude the entire vault even when the containing project has no ignore file.
+  final vaultIgnore = File(
+    paths.validateInternalPath(
+      '${paths.dmcPath}${Platform.pathSeparator}.gitignore',
+    ),
+  );
+  if (!vaultIgnore.existsSync()) {
+    vaultIgnore.writeAsStringSync('*\n', flush: true);
+  }
 
   // Create snapshots/ subdirectory if it doesn't exist
   final snapshotsDir = Directory(paths.snapshotsPath);

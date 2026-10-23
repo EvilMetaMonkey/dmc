@@ -2,17 +2,17 @@ import 'database.dart';
 import 'log.dart';
 import 'workspace.dart';
 
-Future<void> createMark(String name, {String? basePath}) async {
+Future<int> createMark(String name, {String? basePath}) async {
   final trimmedName = name.trim();
   if (trimmedName.isEmpty) {
     print('[DMC] Error: Mark name cannot be empty.');
-    return;
+    return 1;
   }
 
   final paths = DmcPaths(basePath: basePath);
   if (!await paths.dmcDirectory.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return 1;
   }
 
   final db = DmcDatabase(paths.dbPath);
@@ -21,7 +21,7 @@ Future<void> createMark(String name, {String? basePath}) async {
   if (burstId == null) {
     db.close();
     print('[DMC] Error: No burst history found to mark.');
-    return;
+    return 1;
   }
 
   db.upsertMark(
@@ -31,13 +31,14 @@ Future<void> createMark(String name, {String? basePath}) async {
   );
   db.close();
   print('[DMC] Marked "$trimmedName" at burst $burstId');
+  return 0;
 }
 
-Future<void> showMarks({String? basePath}) async {
+Future<int> showMarks({String? basePath}) async {
   final paths = DmcPaths(basePath: basePath);
   if (!await paths.dmcDirectory.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return 1;
   }
 
   final db = DmcDatabase(paths.dbPath);
@@ -47,7 +48,7 @@ Future<void> showMarks({String? basePath}) async {
 
   if (marks.isEmpty) {
     print('[DMC] No marks found.');
-    return;
+    return 0;
   }
 
   print('Marks:');
@@ -56,4 +57,5 @@ Future<void> showMarks({String? basePath}) async {
       '${mark.name} -> burst ${mark.burstId} (${formatTimestamp(mark.createdAt)})',
     );
   }
+  return 0;
 }

@@ -83,8 +83,11 @@ class FakeDaemonProcessState {
           required String workingDirectory,
         }) async {
           spawnCount++;
-          final pid = nextPid++;
-          runningPids.add(pid);
+          final running = watchDmc(basePath: workingDirectory);
+          addTearDown(() async {
+            await stopDaemon(basePath: workingDirectory);
+            await running;
+          });
           return pid;
         },
     isPidRunning: (int pid) async => runningPids.contains(pid),
@@ -968,7 +971,7 @@ dist/
       expect(state.isRunning, isFalse);
     });
 
-    test('showStatus reports watcher running and stopped', () async {
+    test('showStatus does not trust a stale or recycled PID', () async {
       await initDmc(basePath: tempDir.path);
 
       final fakeDaemon = FakeDaemonProcessState();
@@ -982,7 +985,8 @@ dist/
           daemonPlatform: fakeDaemon.platform,
         ),
       );
-      expect(runningOutput, contains('Watcher: Running (PID: 4242)'));
+      expect(runningOutput, contains('Watcher: Stopped'));
+      expect(runningOutput, contains('Protection: not ready'));
 
       await clearDaemonPid(basePath: tempDir.path);
 
@@ -1016,11 +1020,11 @@ dist/
       expect(firstCode, 0);
       expect(secondCode, 1);
       expect(fakeDaemon.spawnCount, 1);
-      expect(await readDaemonPid(basePath: tempDir.path), 5000);
-      expect(output, contains('[DMC] Watcher is already running (PID: 5000).'));
+      expect(await readDaemonPid(basePath: tempDir.path), pid);
+      expect(output, contains('[DMC] Watcher is already running (PID: $pid).'));
     });
 
-    test('stopDaemon kills the watcher and removes the pid file', () async {
+    test('stopDaemon refuses to signal an unauthenticated PID', () async {
       await initDmc(basePath: tempDir.path);
 
       final fakeDaemon = FakeDaemonProcessState();
@@ -1031,12 +1035,12 @@ dist/
         () => stopDaemon(basePath: tempDir.path, platform: fakeDaemon.platform),
       );
 
-      expect(fakeDaemon.killCount, 1);
+      expect(fakeDaemon.killCount, 0);
       expect(
         await File(p.join(tempDir.path, '.dmc', 'daemon.pid')).exists(),
-        isFalse,
+        isTrue,
       );
-      expect(output, contains('[DMC] Stopped watcher (PID: 6000).'));
+      expect(output.join(), contains('No authenticated watcher'));
     });
   });
 

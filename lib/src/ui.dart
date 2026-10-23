@@ -16,7 +16,22 @@ const String _ansiExitAlternateScreen = '\x1B[?1049l';
 
 enum DmcUiView { splash, dashboard }
 
-enum DmcUiInput { up, down, enter, back, quit, restore }
+enum DmcUiInput {
+  up,
+  down,
+  left,
+  right,
+  enter,
+  back,
+  quit,
+  restore,
+  actionStartDaemon,
+  actionStatusVaults,
+  actionViewHistory,
+  actionLaunchDashboard,
+  actionFastRestore,
+  actionConfigure,
+}
 
 enum DmcUiMenuAction {
   startDaemon,
@@ -254,44 +269,136 @@ class DmcUiController {
   }
 
   DmcUiTransition _handleSplash(DmcUiInput input) {
+    final curIndex = _state.splashSelectedIndex;
+    final curItem = _menuItems[curIndex];
+
     switch (input) {
       case DmcUiInput.up:
-        _state = _state.copyWith(
-          splashSelectedIndex:
-              (_state.splashSelectedIndex - 1 + _menuItems.length) %
-              _menuItems.length,
-          clearStatusMessage: true,
-        );
-        return DmcUiTransition(state: _state);
-      case DmcUiInput.down:
-        _state = _state.copyWith(
-          splashSelectedIndex:
-              (_state.splashSelectedIndex + 1) % _menuItems.length,
-          clearStatusMessage: true,
-        );
-        return DmcUiTransition(state: _state);
-      case DmcUiInput.enter:
-        final item = _state.selectedMenuItem;
-        if (item.action == DmcUiMenuAction.launchDashboard ||
-            item.action == DmcUiMenuAction.viewHistory) {
-          _state = _state.copyWith(
-            view: DmcUiView.dashboard,
-            clearStatusMessage: true,
+        int nextIndex;
+        if (curItem.column == 0) {
+          final nextRow = (curItem.row - 1 + 4) % 4;
+          nextIndex = _menuItems.indexWhere(
+            (it) => it.column == 0 && it.row == nextRow,
           );
-          return DmcUiTransition(state: _state);
+        } else {
+          final nextRow = (curItem.row - 1 + 3) % 3;
+          nextIndex = _menuItems.indexWhere(
+            (it) => it.column == 1 && it.row == nextRow,
+          );
         }
-        if (item.action == DmcUiMenuAction.quit) {
-          return DmcUiTransition(state: _state, shouldExit: true);
+        if (nextIndex < 0) {
+          nextIndex = (curIndex - 1 + _menuItems.length) % _menuItems.length;
         }
         _state = _state.copyWith(
-          statusMessage: _splashActionMessage(item.action),
+          splashSelectedIndex: nextIndex,
+          clearStatusMessage: true,
         );
         return DmcUiTransition(state: _state);
+
+      case DmcUiInput.down:
+        int nextIndex;
+        if (curItem.column == 0) {
+          final nextRow = (curItem.row + 1) % 4;
+          nextIndex = _menuItems.indexWhere(
+            (it) => it.column == 0 && it.row == nextRow,
+          );
+        } else {
+          final nextRow = (curItem.row + 1) % 3;
+          nextIndex = _menuItems.indexWhere(
+            (it) => it.column == 1 && it.row == nextRow,
+          );
+        }
+        if (nextIndex < 0) {
+          nextIndex = (curIndex + 1) % _menuItems.length;
+        }
+        _state = _state.copyWith(
+          splashSelectedIndex: nextIndex,
+          clearStatusMessage: true,
+        );
+        return DmcUiTransition(state: _state);
+
+      case DmcUiInput.left:
+        if (curItem.column == 1) {
+          final targetRow = curItem.row.clamp(0, 3);
+          final nextIndex = _menuItems.indexWhere(
+            (it) => it.column == 0 && it.row == targetRow,
+          );
+          if (nextIndex >= 0) {
+            _state = _state.copyWith(
+              splashSelectedIndex: nextIndex,
+              clearStatusMessage: true,
+            );
+          }
+        }
+        return DmcUiTransition(state: _state);
+
+      case DmcUiInput.right:
+        if (curItem.column == 0) {
+          final targetRow = curItem.row.clamp(0, 2);
+          final nextIndex = _menuItems.indexWhere(
+            (it) => it.column == 1 && it.row == targetRow,
+          );
+          if (nextIndex >= 0) {
+            _state = _state.copyWith(
+              splashSelectedIndex: nextIndex,
+              clearStatusMessage: true,
+            );
+          }
+        }
+        return DmcUiTransition(state: _state);
+
+      case DmcUiInput.enter:
+        return _executeSplashAction(_state.selectedMenuItem.action);
+
+      case DmcUiInput.actionStartDaemon:
+        _state = _state.copyWith(splashSelectedIndex: 0);
+        return _executeSplashAction(DmcUiMenuAction.startDaemon);
+
+      case DmcUiInput.actionStatusVaults:
+        _state = _state.copyWith(splashSelectedIndex: 1);
+        return _executeSplashAction(DmcUiMenuAction.statusVaults);
+
+      case DmcUiInput.actionViewHistory:
+        _state = _state.copyWith(splashSelectedIndex: 2);
+        return _executeSplashAction(DmcUiMenuAction.viewHistory);
+
+      case DmcUiInput.actionLaunchDashboard:
+        _state = _state.copyWith(splashSelectedIndex: 3);
+        return _executeSplashAction(DmcUiMenuAction.launchDashboard);
+
+      case DmcUiInput.restore:
+      case DmcUiInput.actionFastRestore:
+        _state = _state.copyWith(splashSelectedIndex: 4);
+        return _executeSplashAction(DmcUiMenuAction.fastRestore);
+
+      case DmcUiInput.actionConfigure:
+        _state = _state.copyWith(splashSelectedIndex: 5);
+        return _executeSplashAction(DmcUiMenuAction.configure);
+
       case DmcUiInput.quit:
         return DmcUiTransition(state: _state, shouldExit: true);
+
       default:
         return DmcUiTransition(state: _state);
     }
+  }
+
+  DmcUiTransition _executeSplashAction(DmcUiMenuAction action) {
+    if (action == DmcUiMenuAction.launchDashboard ||
+        action == DmcUiMenuAction.viewHistory) {
+      _state = _state.copyWith(
+        view: DmcUiView.dashboard,
+        clearStatusMessage: true,
+      );
+      return DmcUiTransition(state: _state);
+    }
+    if (action == DmcUiMenuAction.quit) {
+      return DmcUiTransition(state: _state, shouldExit: true);
+    }
+    _state = _state.copyWith(
+      statusMessage: _splashActionMessage(action),
+    );
+    return DmcUiTransition(state: _state);
   }
 
   DmcUiTransition _handleDashboard(DmcUiInput input) {
@@ -327,6 +434,8 @@ class DmcUiController {
         return DmcUiTransition(state: _state, shouldRestore: true);
       case DmcUiInput.quit:
         return DmcUiTransition(state: _state, shouldExit: true);
+      default:
+        return DmcUiTransition(state: _state);
     }
   }
 }
@@ -457,6 +566,10 @@ DmcUiInput? _mapKey(Key key) {
         return DmcUiInput.up;
       case ControlCharacter.arrowDown:
         return DmcUiInput.down;
+      case ControlCharacter.arrowLeft:
+        return DmcUiInput.left;
+      case ControlCharacter.arrowRight:
+        return DmcUiInput.right;
       case ControlCharacter.enter:
         return DmcUiInput.enter;
       case ControlCharacter.escape:
@@ -470,6 +583,16 @@ DmcUiInput? _mapKey(Key key) {
       return DmcUiInput.quit;
     case 'r':
       return DmcUiInput.restore;
+    case 's':
+      return DmcUiInput.actionStartDaemon;
+    case 't':
+      return DmcUiInput.actionStatusVaults;
+    case 'l':
+      return DmcUiInput.actionViewHistory;
+    case 'u':
+      return DmcUiInput.actionLaunchDashboard;
+    case 'c':
+      return DmcUiInput.actionConfigure;
     default:
       return null;
   }
@@ -1237,30 +1360,26 @@ void _writeCenteredLine(
 
 List<String> buildSplashDeloreanArt() {
   const lines = [
-    r"                    ┌──────────────┬──────────────┐                    ",
-    r"               ┌────┤░░░░░░░░░░░░░│░░░░░░░░░░░░░├────┐               ",
-    r"            ┌──┤▒▒│░░╲         │         ╱░░│▒▒├──┐            ",
-    r"          ╭─┤▒▒│▒▒│░░│   ┌─────┴─────┐   │░░│▒▒│▒▒├─╮          ",
-    r"        ╱  │▒▒│▒▒│░░│   │ ┌──────┐ │   │░░│▒▒│▒▒│  ╲        ",
-    r"       │   │▒▒│▒▒│░░│   │ │      │ │   │░░│▒▒│▒▒│   │       ",
-    r"       │   │▒▒│▒▒│░░│   │ │ DMC  │ │   │░░│▒▒│▒▒│   │       ",
-    r"       │   │▒▒│▒▒│░░│   │ └──────┘ │   │░░│▒▒│▒▒│   │       ",
-    r"       │   │▒▒│▒▒│░░│ ┌─┴──────────┴─┐ │░░│▒▒│▒▒│   │       ",
-    r"       │▄▄▄└──┴──┴──┴─┤    ┌────┐    ├─┴──┴──┴──┘▄▄▄│       ",
-    r"       │██════════════│    │ DMC│    │════════════██│       ",
-    r"       │▄▄════════════│____└────┘____│════════════▄▄│       ",
-    r"       ╰─┐                                          ┌─╯       ",
-    r"         ╰─────────────╲              ╱─────────────╯         ",
+    r"               /\                                             /\               ",
+    r"              /  \_________                         _________/  \              ",
+    r"             /   /         \                       /         \   \             ",
+    r"            /   /           \                     /           \   \            ",
+    r"           /___/             \                   /             \___\           ",
+    r"               \              \_________________/              /               ",
+    r"                \_____   _______________________________  _____/                ",
+    r"                      \ [                               ] /                    ",
+    r"                  ___  \[     D E L O R E A N           ]/  ___                 ",
+    r"                 /   \  |  ===========================  |  /   \                ",
+    r"                | [=] | | [■ ■]      | DMC |      [■ ■] | | [=] |                ",
+    r"                 \___/  |_______|_______________|_______|  \___/                 ",
+    r"                        (O)                           (O)                        ",
+    r"                         \=============================/                         ",
   ];
-  final alignedLines = <String>[
-    for (var i = 0; i < lines.length; i++)
-      i < 5 ? _shiftArtLineLeft(lines[i]) : lines[i],
-  ];
-  final artWidth = alignedLines.fold<int>(
+  final artWidth = lines.fold<int>(
     0,
     (maxWidth, line) => line.length > maxWidth ? line.length : maxWidth,
   );
-  return alignedLines
+  return lines
       .map((line) => line.padRight(artWidth))
       .toList(growable: false);
 }

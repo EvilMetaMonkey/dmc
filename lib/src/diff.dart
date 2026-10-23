@@ -1,8 +1,8 @@
-import 'dart:io';
+import 'dart:convert';
 import 'package:diff_match_patch/diff_match_patch.dart';
-import 'package:path/path.dart' as p;
 import 'database.dart';
 import 'history_support.dart';
+import 'snapshot_store.dart';
 import 'workspace.dart';
 
 const String _ansiRed = '\x1B[31m';
@@ -219,19 +219,13 @@ Future<DiffOutput> buildDiffOutput(
       );
     }
 
-    final snapshotFile = File(
-      p.join(paths.snapshotsPath, snapshot.snapshotPath),
+    final snapshotText = utf8.decode(
+      SnapshotStore.readVerifiedBytes(
+        paths.snapshotsPath,
+        snapshot.snapshotPath,
+        snapshot.hash,
+      ),
     );
-    if (!await snapshotFile.exists()) {
-      db.close();
-      return DiffOutput(
-        hadError: true,
-        output:
-            '[DMC] Error: Snapshot file not found: ${snapshot.snapshotPath}',
-      );
-    }
-
-    final snapshotText = await snapshotFile.readAsString();
     if (!await target.file.exists()) {
       db.close();
       return DiffOutput(

@@ -1,0 +1,177 @@
+enum CheckpointStatus { creating, open, closing, closed, invalid, released }
+
+enum CheckpointFileKind { file, absent }
+
+enum CheckpointChangeKind { unchanged, modified, created, deleted }
+
+CheckpointStatus checkpointStatusFromText(String value) =>
+    CheckpointStatus.values.firstWhere(
+      (status) => status.name == value,
+      orElse: () => throw FormatException('Unknown checkpoint status: $value'),
+    );
+
+CheckpointFileKind checkpointFileKindFromText(String value) =>
+    CheckpointFileKind.values.firstWhere(
+      (kind) => kind.name == value,
+      orElse: () =>
+          throw FormatException('Unknown checkpoint file kind: $value'),
+    );
+
+CheckpointChangeKind? checkpointChangeKindFromText(String? value) =>
+    value == null
+    ? null
+    : CheckpointChangeKind.values.firstWhere(
+        (kind) => kind.name == value,
+        orElse: () => throw FormatException(
+          'Unknown checkpoint change classification: $value',
+        ),
+      );
+
+class CheckpointRecord {
+  final String id;
+  final String? label;
+  final String source;
+  final CheckpointStatus status;
+  final int manifestVersion;
+  final int createdAt;
+  final int? closedAt;
+  final int? releasedAt;
+  final String policyFingerprint;
+  final int fatalErrorCount;
+  final int exclusionCount;
+
+  const CheckpointRecord({
+    required this.id,
+    required this.label,
+    required this.source,
+    required this.status,
+    required this.manifestVersion,
+    required this.createdAt,
+    required this.closedAt,
+    required this.releasedAt,
+    required this.policyFingerprint,
+    required this.fatalErrorCount,
+    required this.exclusionCount,
+  });
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'label': label,
+    'source': source,
+    'status': status.name,
+    'manifestVersion': manifestVersion,
+    'createdAt': createdAt,
+    'closedAt': closedAt,
+    'releasedAt': releasedAt,
+    'policyFingerprint': policyFingerprint,
+    'fatalErrorCount': fatalErrorCount,
+    'exclusionCount': exclusionCount,
+  };
+}
+
+class CheckpointFileRecord {
+  final String checkpointId;
+  final String filePath;
+  final CheckpointFileKind beforeKind;
+  final int? beforeSnapshotId;
+  final String? beforeHash;
+  final int? beforeMode;
+  final CheckpointFileKind? afterKind;
+  final int? afterSnapshotId;
+  final String? afterHash;
+  final int? afterMode;
+  final CheckpointChangeKind? changeKind;
+
+  const CheckpointFileRecord({
+    required this.checkpointId,
+    required this.filePath,
+    required this.beforeKind,
+    required this.beforeSnapshotId,
+    required this.beforeHash,
+    required this.beforeMode,
+    required this.afterKind,
+    required this.afterSnapshotId,
+    required this.afterHash,
+    required this.afterMode,
+    required this.changeKind,
+  });
+
+  Map<String, Object?> toJson() => {
+    'path': filePath,
+    'before': {
+      'kind': beforeKind.name,
+      'snapshotId': beforeSnapshotId,
+      'hash': beforeHash,
+      'mode': beforeMode,
+    },
+    'after': afterKind == null
+        ? null
+        : {
+            'kind': afterKind!.name,
+            'snapshotId': afterSnapshotId,
+            'hash': afterHash,
+            'mode': afterMode,
+          },
+    'change': changeKind?.name,
+  };
+}
+
+class CheckpointIssue {
+  final int? id;
+  final String checkpointId;
+  final String phase;
+  final String? filePath;
+  final String code;
+  final String message;
+  final bool fatal;
+
+  const CheckpointIssue({
+    this.id,
+    required this.checkpointId,
+    required this.phase,
+    required this.filePath,
+    required this.code,
+    required this.message,
+    required this.fatal,
+  });
+
+  Map<String, Object?> toJson() => {
+    'phase': phase,
+    'path': filePath,
+    'code': code,
+    'message': message,
+    'fatal': fatal,
+  };
+}
+
+class CheckpointView {
+  final CheckpointRecord checkpoint;
+  final List<CheckpointFileRecord> files;
+  final List<CheckpointIssue> issues;
+
+  const CheckpointView({
+    required this.checkpoint,
+    required this.files,
+    required this.issues,
+  });
+
+  int get protectedFileCount =>
+      files.where((file) => file.beforeKind == CheckpointFileKind.file).length;
+  int get changedFileCount => files
+      .where(
+        (file) =>
+            file.changeKind != null &&
+            file.changeKind != CheckpointChangeKind.unchanged,
+      )
+      .length;
+
+  Map<String, Object?> toJson({bool includeFiles = true}) => {
+    'checkpoint': {
+      ...checkpoint.toJson(),
+      'protectedFileCount': protectedFileCount,
+      'changedFileCount': changedFileCount,
+    },
+    if (includeFiles) 'files': files.map((file) => file.toJson()).toList(),
+    'issues': issues.map((issue) => issue.toJson()).toList(),
+  };
+}

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'workspace.dart';
 
 /// Directories to ignore when watching for file changes.
 const List<String> ignoredDirs = [
@@ -42,6 +43,14 @@ class IgnoreRule {
   static IgnoreRule? fromPattern(String rawPattern) {
     final trimmed = rawPattern.trim();
     if (trimmed.isEmpty || trimmed.startsWith('#')) return null;
+    if (trimmed.startsWith('!') ||
+        trimmed.contains('[') ||
+        trimmed.contains(']')) {
+      throw FormatException(
+        'Unsupported ignore pattern "$trimmed". DMC supports /, *, ** and ?; negation and character classes are not supported.',
+      );
+    }
+    final anchored = trimmed.startsWith('/');
 
     final directoryOnly = trimmed.endsWith('/') || trimmed.endsWith('\\');
     var normalized = trimmed
@@ -50,6 +59,9 @@ class IgnoreRule {
 
     if (normalized.startsWith('.${p.separator}')) {
       normalized = normalized.substring(2);
+    }
+    while (normalized.startsWith(p.separator)) {
+      normalized = normalized.substring(1);
     }
 
     normalized = p.normalize(normalized);
@@ -60,23 +72,30 @@ class IgnoreRule {
     return IgnoreRule._(
       pattern: normalized,
       directoryOnly: directoryOnly,
-      matchAnywhere: !normalized.contains(p.separator),
+      matchAnywhere: !anchored && !normalized.contains(p.separator),
       hasWildcard: normalized.contains('*') || normalized.contains('?'),
     );
   }
 
-  bool matches(String relativePath) {
+  bool matches(String relativePath, {bool isDirectory = false}) {
     final normalizedRelativePath = p.normalize(relativePath);
     if (normalizedRelativePath.isEmpty || normalizedRelativePath == '.') {
       return false;
     }
 
     final segments = p.split(normalizedRelativePath);
-    if (matchAnywhere) {
-      return _matchesSegments(segments);
+    // Match each ancestor as a directory, so directory exclusions also apply
+    // to events below a directory that the scanner has pruned.
+    for (var length = 1; length <= segments.length; length++) {
+      if (directoryOnly && length == segments.length && !isDirectory) continue;
+      final candidate = segments.take(length).join(p.separator);
+      if (matchAnywhere
+          ? _matchesSegments([segments[length - 1]])
+          : _matchesPath(candidate)) {
+        return true;
+      }
     }
-
-    return _matchesPath(normalizedRelativePath);
+    return false;
   }
 
   bool _matchesSegments(List<String> segments) {
@@ -99,17 +118,27 @@ class IgnoreRule {
       return true;
     }
 
-    return pathText.startsWith('$patternText/');
+    return false;
   }
 
   static RegExp _buildRegex(String pattern) {
     final buffer = StringBuffer('^');
 
-    for (final rune in pattern.runes) {
-      final char = String.fromCharCode(rune);
+    for (var i = 0; i < pattern.length; i++) {
+      final char = pattern[i];
       switch (char) {
         case '*':
-          buffer.write('[^/]*');
+          if (i + 1 < pattern.length && pattern[i + 1] == '*') {
+            i++;
+            if (i + 1 < pattern.length && pattern[i + 1] == '/') {
+              buffer.write('(?:.*/)?');
+              i++;
+            } else {
+              buffer.write('.*');
+            }
+          } else {
+            buffer.write('[^/]*');
+          }
           break;
         case '?':
           buffer.write('[^/]');
@@ -143,7 +172,10 @@ class IgnoreRule {
   }
 }
 
-Future<List<IgnoreRule>> loadIgnoreRules(String targetPath) async {
+Future<List<IgnoreRule>> loadIgnoreRules(
+  String targetPath, {
+  bool announce = true,
+}) async {
   final rules = [
     for (final ignoredDir in ignoredDirs)
       IgnoreRule.defaultDirectory(ignoredDir),
@@ -153,7 +185,7 @@ Future<List<IgnoreRule>> loadIgnoreRules(String targetPath) async {
     File(p.join(targetPath, gitIgnoreFileName)),
     rules,
   );
-  if (gitRuleCount > 0) {
+  if (announce && gitRuleCount > 0) {
     print('[DMC] Loaded $gitRuleCount ignore rule(s) from $gitIgnoreFileName');
   }
 
@@ -162,7 +194,7 @@ Future<List<IgnoreRule>> loadIgnoreRules(String targetPath) async {
     rules,
   );
 
-  if (userRuleCount > 0) {
+  if (announce && userRuleCount > 0) {
     print('[DMC] Loaded $userRuleCount ignore rule(s) from $dmcIgnoreFileName');
   }
 
@@ -170,12 +202,18 @@ Future<List<IgnoreRule>> loadIgnoreRules(String targetPath) async {
 }
 
 Future<int> _loadRulesFromFile(File file, List<IgnoreRule> rules) async {
+  DmcPaths(basePath: file.parent.path).validateInternalPath(file.path);
   if (!await file.exists()) {
     return 0;
   }
 
   var ruleCount = 0;
   for (final line in await file.readAsLines()) {
+    if (p.basename(file.path) == gitIgnoreFileName && line.contains('\\')) {
+      throw FormatException(
+        'Git ignore escapes are unsupported: $line. Use simple rules in .dmcignore.',
+      );
+    }
     final rule = IgnoreRule.fromPattern(line);
     if (rule == null) continue;
 

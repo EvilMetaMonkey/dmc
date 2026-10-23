@@ -135,7 +135,7 @@ void _printTaskLogs(
 }
 
 /// Show recent backup logs
-Future<void> showLogs({
+Future<int> showLogs({
   int limit = 10,
   String? basePath,
   bool bursts = false,
@@ -146,7 +146,7 @@ Future<void> showLogs({
   final dmcDir = paths.dmcDirectory;
   if (!await dmcDir.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return 1;
   }
 
   final db = DmcDatabase(paths.dbPath);
@@ -157,19 +157,19 @@ Future<void> showLogs({
   if (logs.isEmpty) {
     print('[DMC] No backup history found.');
     db.close();
-    return;
+    return 0;
   }
 
   if (bursts) {
     _printBurstLogs(logs);
     db.close();
-    return;
+    return 0;
   }
 
   if (tasks) {
     _printTaskLogs(logs);
     db.close();
-    return;
+    return 0;
   }
 
   print('');
@@ -185,4 +185,5 @@ Future<void> showLogs({
   print('Total: ${logs.length} backup(s)');
 
   db.close();
+  return 0;
 }

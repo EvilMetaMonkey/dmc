@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:path/path.dart' as p;
 
@@ -7,7 +8,7 @@ import 'database.dart';
 import 'history_support.dart';
 import 'log.dart';
 import 'restore_events.dart';
-import 'snapshot_names.dart';
+import 'snapshot_store.dart';
 import 'task.dart';
 import 'workspace.dart';
 
@@ -187,6 +188,17 @@ Future<RestoreResult> _restoreBurstSnapshots(
   }
 
   final targets = _latestSnapshotsPerFileInBurst(burstSnapshots);
+  for (final target in targets) {
+    final check = await planRestore(
+      target.filePath,
+      id: target.id,
+      basePath: basePath,
+    );
+    if (check.hadError) {
+      db.close();
+      return RestoreResult.error();
+    }
+  }
   print(
     '[DMC] ${dryRun ? 'Burst restore preview' : 'Burst restore'} for $burstId (${targets.length} file(s))',
   );
@@ -243,6 +255,11 @@ Future<RestoreResult> _redoBurstSnapshots(
   }
 
   final targets = _latestSnapshotsPerFileInBurst(burstSnapshots);
+  for (final target in targets) {
+    if ((await planRedo(target.filePath, basePath: basePath)).hadError) {
+      return RestoreResult.error();
+    }
+  }
   print(
     '[DMC] ${dryRun ? 'Burst redo preview' : 'Burst redo'} for $burstId (${targets.length} file(s))',
   );
@@ -289,6 +306,17 @@ Future<RestoreResult> _restoreTaskSnapshots(
   }
 
   final targets = _latestSnapshotsPerFileInBurst(taskSnapshots);
+  for (final target in targets) {
+    final check = await planRestore(
+      target.filePath,
+      id: target.id,
+      basePath: basePath,
+    );
+    if (check.hadError) {
+      db.close();
+      return RestoreResult.error();
+    }
+  }
   print(
     '[DMC] ${dryRun ? 'Task restore preview' : 'Task restore'} for "$taskName" (${targets.length} file(s))',
   );
@@ -345,6 +373,11 @@ Future<RestoreResult> _redoTaskSnapshots(
   }
 
   final targets = _latestSnapshotsPerFileInBurst(taskSnapshots);
+  for (final target in targets) {
+    if ((await planRedo(target.filePath, basePath: basePath)).hadError) {
+      return RestoreResult.error();
+    }
+  }
   print(
     '[DMC] ${dryRun ? 'Task redo preview' : 'Task redo'} for "$taskName" (${targets.length} file(s))',
   );
@@ -413,9 +446,14 @@ Future<RestorePlanResult> planRestore(
   String? snapshotFilePath;
   if (!snapshot.isTombstone) {
     snapshotFilePath = p.join(paths.snapshotsPath, snapshot.snapshotPath);
-    final snapshotFile = File(snapshotFilePath);
-    if (!await snapshotFile.exists()) {
-      print('[DMC] Error: Snapshot file not found: ${snapshot.snapshotPath}');
+    try {
+      SnapshotStore.readVerifiedBytes(
+        paths.snapshotsPath,
+        snapshot.snapshotPath,
+        snapshot.hash,
+      );
+    } catch (e) {
+      print('[DMC] Error: $e');
       return RestorePlanResult.error(dbPath: paths.dbPath, target: target);
     }
   }
@@ -458,7 +496,13 @@ Future<RestoreResult> _previewRestorePlan(
         : '';
     final restoredText = plan.snapshot.isTombstone
         ? ''
-        : await File(plan.snapshotFilePath!).readAsString();
+        : utf8.decode(
+            SnapshotStore.readVerifiedBytes(
+              p.join(p.dirname(planningResult.dbPath), snapshotsDirName),
+              plan.snapshot.snapshotPath,
+              plan.snapshot.hash,
+            ),
+          );
     final action = plan.snapshot.isTombstone
         ? 'File will be deleted'
         : await targetFile.exists()
@@ -480,51 +524,22 @@ Future<int?> _captureCurrentSnapshotIdBeforeRestore(
 ) async {
   final targetFile = File(plan.targetFilePath);
   final timestamp = DateTime.now().millisecondsSinceEpoch;
-  final latestSnapshot = db.getLatestSnapshot(
-    plan.snapshot.target.relativePath,
-  );
   final workspaceRoot = p.dirname(p.dirname(db.dbPath));
   final activeTaskName = readActiveTaskSync(basePath: workspaceRoot);
-  if (!await targetFile.exists()) {
-    if (latestSnapshot != null &&
-        isTombstoneSnapshot(
-          hash: latestSnapshot.hash,
-          snapshotPath: latestSnapshot.snapshotPath,
-        )) {
-      return latestSnapshot.id;
-    }
-
-    db.insertTombstone(
-      filePath: plan.snapshot.target.relativePath,
-      timestamp: timestamp,
-      taskName: activeTaskName,
-    );
-    return db.db.lastInsertRowId;
-  }
-
-  final currentHash = await computeFileHash(targetFile);
-  if (latestSnapshot != null && latestSnapshot.hash == currentHash) {
-    return latestSnapshot.id;
-  }
-
-  final snapshotFilename = buildSnapshotFilename(
-    relativePath: plan.snapshot.target.relativePath,
-    timestamp: timestamp,
-    hash: currentHash,
-  );
   final snapshotsPath = p.join(p.dirname(db.dbPath), snapshotsDirName);
-  await Directory(snapshotsPath).create(recursive: true);
-  final snapshotPath = p.join(snapshotsPath, snapshotFilename);
-
-  await targetFile.copy(snapshotPath);
-  db.insertSnapshot(
-    filePath: plan.snapshot.target.relativePath,
-    snapshotPath: snapshotFilename,
-    timestamp: timestamp,
-    hash: currentHash,
-    taskName: activeTaskName,
-  );
-  return db.db.lastInsertRowId;
+  final result = await SnapshotStore(database: db, snapshotsPath: snapshotsPath)
+      .captureFile(
+        source: targetFile,
+        relativePath: plan.snapshot.target.relativePath,
+        timestamp: timestamp,
+        taskName: activeTaskName,
+        recordInitialAbsence: true,
+        requireStableRead: true,
+      );
+  if (result.hadError || result.snapshotId == null) {
+    throw StateError('Cannot save pre-restore state: ${result.message}');
+  }
+  return result.snapshotId;
 }
 
 Future<RestoreResult> _applyRestorePlan(
@@ -548,10 +563,22 @@ Future<RestoreResult> _applyRestorePlan(
   int? overwrittenSnapshotId;
 
   try {
+    // Recheck at application time, and write the same verified bytes. A preview
+    // is not a guarantee that the vault remained intact until apply.
+    final restoredBytes = plan.snapshot.isTombstone
+        ? null
+        : SnapshotStore.readVerifiedBytes(
+            p.join(p.dirname(planningResult.dbPath), snapshotsDirName),
+            plan.snapshot.snapshotPath,
+            plan.snapshot.hash,
+          );
     overwrittenSnapshotId = await _captureCurrentSnapshotIdBeforeRestore(
       db,
       plan,
     );
+    DmcPaths(
+      basePath: p.dirname(p.dirname(planningResult.dbPath)),
+    ).resolveFile(plan.targetFilePath);
     if (plan.snapshot.isTombstone) {
       final targetFile = File(plan.targetFilePath);
       if (await targetFile.exists()) {
@@ -560,7 +587,7 @@ Future<RestoreResult> _applyRestorePlan(
     } else {
       final targetFile = File(plan.targetFilePath);
       await targetFile.parent.create(recursive: true);
-      await File(plan.snapshotFilePath!).copy(plan.targetFilePath);
+      await targetFile.writeAsBytes(restoredBytes!, flush: true);
     }
     repository.recordEvent(
       timestamp: DateTime.now().millisecondsSinceEpoch,
@@ -576,15 +603,19 @@ Future<RestoreResult> _applyRestorePlan(
     print('[DMC] $action $filePath to version from $time');
     return RestoreResult.success(restorePossible: true);
   } catch (e) {
-    repository.recordEvent(
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      command: commandName,
-      filePath: plan.snapshot.target.relativePath,
-      snapshotId: plan.snapshot.snapshotId,
-      success: false,
-      failureMessage: e.toString(),
-      overwrittenSnapshotId: overwrittenSnapshotId,
-    );
+    try {
+      repository.recordEvent(
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        command: commandName,
+        filePath: plan.snapshot.target.relativePath,
+        snapshotId: plan.snapshot.snapshotId,
+        success: false,
+        failureMessage: e.toString(),
+        overwrittenSnapshotId: overwrittenSnapshotId,
+      );
+    } catch (auditError) {
+      print('[DMC] Could not record restore failure: $auditError');
+    }
     print('[DMC] Error restoring file: $e');
     return RestoreResult.error();
   } finally {

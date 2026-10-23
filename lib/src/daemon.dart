@@ -1,74 +1,76 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:path/path.dart' as p;
-
 import 'workspace.dart';
+import 'watcher_control.dart';
 
 typedef DaemonState = ({bool hasPidFile, int? pid, bool isRunning});
-
-typedef DaemonPidMetadata =
-    ({int pid, String? executable, List<String> arguments});
-
+typedef DaemonPidMetadata = ({
+  int pid,
+  String? executable,
+  List<String> arguments,
+});
 typedef SpawnDetachedProcess =
     Future<int> Function(
       String executable,
       List<String> arguments, {
       required String workingDirectory,
     });
-
 typedef CheckPidRunning = Future<bool> Function(int pid);
-
 typedef KillPid = bool Function(int pid);
 
+/// Spawn injection remains available for command tests. PID liveness/kill
+/// callbacks are retained for source compatibility but no longer confer ownership.
 class DaemonPlatform {
   final SpawnDetachedProcess spawnDetachedProcess;
   final CheckPidRunning isPidRunning;
   final KillPid killPid;
-
   const DaemonPlatform({
     required this.spawnDetachedProcess,
     required this.isPidRunning,
     required this.killPid,
   });
-
-  static final DaemonPlatform system = DaemonPlatform(
-    spawnDetachedProcess: _spawnDetachedProcess,
-    isPidRunning: _isPidRunning,
-    killPid: _killPid,
+  static final system = DaemonPlatform(
+    spawnDetachedProcess:
+        (executable, arguments, {required workingDirectory}) async =>
+            (await Process.start(
+              executable,
+              arguments,
+              workingDirectory: workingDirectory,
+              mode: ProcessStartMode.detached,
+            )).pid,
+    isPidRunning: (_) async => false,
+    killPid: (_) => false,
   );
 }
 
-Future<int?> readDaemonPid({String? basePath}) async {
-  final metadata = await readDaemonPidMetadata(basePath: basePath);
-  return metadata?.pid;
-}
+Future<int?> readDaemonPid({String? basePath}) async =>
+    (await readDaemonPidMetadata(basePath: basePath))?.pid;
 
 Future<DaemonPidMetadata?> readDaemonPidMetadata({String? basePath}) async {
-  final paths = DmcPaths(basePath: basePath);
-  if (!await paths.daemonPidFile.exists()) {
-    return null;
+  final file = DmcPaths(basePath: basePath).daemonPidFile;
+  if (!file.existsSync()) return null;
+  final text = file.readAsStringSync().trim();
+  final legacy = int.tryParse(text);
+  if (legacy != null) {
+    return legacy > 0
+        ? (pid: legacy, executable: null, arguments: const <String>[])
+        : null;
   }
-
-  final rawValue = (await paths.daemonPidFile.readAsString()).trim();
-  final legacyPid = int.tryParse(rawValue);
-  if (legacyPid != null) {
-    return (pid: legacyPid, executable: null, arguments: const <String>[]);
-  }
-
   try {
-    final decoded = jsonDecode(rawValue);
-    if (decoded is! Map<String, dynamic>) return null;
-    final pid = decoded['pid'];
-    if (pid is! int) return null;
-    final executable = decoded['executable'];
-    final arguments = decoded['arguments'];
+    final value = jsonDecode(text);
+    if (value is! Map || value['pid'] is! int || (value['pid'] as int) <= 0) {
+      return null;
+    }
     return (
-      pid: pid,
-      executable: executable is String ? executable : null,
-      arguments: arguments is List
-          ? arguments.whereType<String>().toList(growable: false)
-          : const <String>[],
+      pid: value['pid'] as int,
+      executable: value['executable'] is String
+          ? value['executable'] as String
+          : null,
+      arguments: value['arguments'] is List
+          ? (value['arguments'] as List).whereType<String>().toList()
+          : <String>[],
     );
   } on FormatException {
     return null;
@@ -80,204 +82,132 @@ Future<void> writeDaemonPid(
   String? basePath,
   String? executable,
   List<String>? arguments,
-}) {
-  final paths = DmcPaths(basePath: basePath);
-  if (executable == null && arguments == null) {
-    return paths.daemonPidFile.writeAsString('$pid\n');
-  }
-
-  return paths.daemonPidFile.writeAsString(
-    '${jsonEncode({
-      'pid': pid,
-      'executable': executable,
-      'arguments': arguments ?? const <String>[],
-      'started_at': DateTime.now().millisecondsSinceEpoch,
-    })}\n',
-  );
+}) async {
+  if (pid <= 0) throw ArgumentError('PID must be positive.');
+  writeControlJson(DmcPaths(basePath: basePath), 'daemon.pid', {
+    'pid': pid,
+    'executable': executable,
+    'arguments': arguments ?? [],
+  });
 }
 
 Future<void> clearDaemonPid({String? basePath}) async {
-  final paths = DmcPaths(basePath: basePath);
-  if (await paths.daemonPidFile.exists()) {
-    await paths.daemonPidFile.delete();
-  }
+  final file = DmcPaths(basePath: basePath).daemonPidFile;
+  if (file.existsSync()) file.deleteSync();
 }
 
 Future<DaemonState> getDaemonState({
   String? basePath,
   DaemonPlatform? platform,
 }) async {
-  final resolvedPlatform = platform ?? DaemonPlatform.system;
   final paths = DmcPaths(basePath: basePath);
-  final hasPidFile = await paths.daemonPidFile.exists();
-  if (!hasPidFile) {
-    return (hasPidFile: false, pid: null, isRunning: false);
-  }
-
-  final metadata = await readDaemonPidMetadata(basePath: basePath);
-  if (metadata == null) {
-    return (hasPidFile: true, pid: null, isRunning: false);
-  }
-
-  final pidIsRunning = await resolvedPlatform.isPidRunning(metadata.pid);
-  final commandMatches = _daemonCommandMatches(metadata);
+  final live = await queryWatcher(paths);
+  final savedPid = await readDaemonPid(basePath: basePath);
   return (
-    hasPidFile: true,
-    pid: metadata.pid,
-    isRunning: pidIsRunning && commandMatches,
+    hasPidFile: paths.daemonPidFile.existsSync(),
+    pid: live?['pid'] as int? ?? savedPid,
+    isRunning: live != null,
   );
 }
 
-Future<int> startDaemon({String? basePath, DaemonPlatform? platform}) async {
-  final resolvedPlatform = platform ?? DaemonPlatform.system;
-  final paths = DmcPaths(basePath: basePath);
-  if (!await paths.dmcDirectory.exists()) {
-    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return 1;
-  }
-
-  final state = await getDaemonState(
-    basePath: paths.rootPath,
-    platform: resolvedPlatform,
-  );
-  if (state.hasPidFile && state.isRunning && state.pid != null) {
-    print('[DMC] Watcher is already running (PID: ${state.pid}).');
-    return 1;
-  }
-
-  if (state.hasPidFile && !state.isRunning) {
-    await clearDaemonPid(basePath: paths.rootPath);
-    print('[DMC] Removed stale daemon PID file.');
-  }
-
-  final launch = _buildWatchLaunchCommand();
-  final pid = await resolvedPlatform.spawnDetachedProcess(
-    launch.executable,
-    launch.arguments,
-    workingDirectory: paths.rootPath,
-  );
-
-  await writeDaemonPid(
-    pid,
-    basePath: paths.rootPath,
-    executable: launch.executable,
-    arguments: launch.arguments,
-  );
-  print('[DMC] Started watcher in background (PID: $pid).');
-  return 0;
-}
-
-Future<int> stopDaemon({String? basePath, DaemonPlatform? platform}) async {
-  final resolvedPlatform = platform ?? DaemonPlatform.system;
-  final paths = DmcPaths(basePath: basePath);
-  if (!await paths.dmcDirectory.exists()) {
-    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return 1;
-  }
-
-  final state = await getDaemonState(
-    basePath: paths.rootPath,
-    platform: resolvedPlatform,
-  );
-  if (!state.hasPidFile) {
-    print('[DMC] Watcher is not running.');
-    return 1;
-  }
-
-  if (state.pid == null) {
-    await clearDaemonPid(basePath: paths.rootPath);
-    print('[DMC] Watcher PID file was invalid and has been removed.');
-    return 1;
-  }
-
-  if (!state.isRunning) {
-    await clearDaemonPid(basePath: paths.rootPath);
-    print('[DMC] Watcher is already stopped. Removed stale PID file.');
-    return 1;
-  }
-
-  final killed = resolvedPlatform.killPid(state.pid!);
-  if (!killed) {
-    print('[DMC] Error: Failed to stop watcher process ${state.pid}.');
-    return 1;
-  }
-
-  await clearDaemonPid(basePath: paths.rootPath);
-  print('[DMC] Stopped watcher (PID: ${state.pid}).');
-  return 0;
-}
-
-({String executable, List<String> arguments}) _buildWatchLaunchCommand() {
-  final executable = Platform.resolvedExecutable;
-  final scriptPath = Platform.script.toFilePath();
-  final scriptExtension = p.extension(scriptPath).toLowerCase();
-
-  if (scriptExtension == '.dart') {
-    return (executable: executable, arguments: [scriptPath, 'watch']);
-  }
-
-  return (executable: executable, arguments: ['watch']);
-}
-
-bool _daemonCommandMatches(DaemonPidMetadata metadata) {
-  if (metadata.executable == null) {
-    return true;
-  }
-
-  final launch = _buildWatchLaunchCommand();
-  return p.normalize(metadata.executable!) == p.normalize(launch.executable) &&
-      _listEquals(metadata.arguments, launch.arguments);
-}
-
-bool _listEquals(List<String> left, List<String> right) {
-  if (left.length != right.length) return false;
-  for (var i = 0; i < left.length; i++) {
-    if (left[i] != right[i]) return false;
-  }
-  return true;
-}
-
-Future<int> _spawnDetachedProcess(
-  String executable,
-  List<String> arguments, {
-  required String workingDirectory,
+Future<int> startDaemon({
+  String? basePath,
+  DaemonPlatform? platform,
+  Duration readinessTimeout = const Duration(seconds: 30),
 }) async {
-  final process = await Process.start(
+  final paths = DmcPaths(basePath: basePath);
+  if (!paths.dmcDirectory.existsSync() || !File(paths.dbPath).existsSync()) {
+    print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
+    return 1;
+  }
+  final existing = await queryWatcher(paths);
+  if (existing != null) {
+    print('[DMC] Watcher is already running (PID: ${existing['pid']}).');
+    return 1;
+  }
+  checkLegacyWatcher(paths);
+  final executable = Platform.resolvedExecutable;
+  final script = Platform.script.toFilePath();
+  final arguments = p.extension(script).toLowerCase() == '.dart'
+      ? [script, 'watch']
+      : ['watch'];
+  final child = await (platform ?? DaemonPlatform.system).spawnDetachedProcess(
     executable,
     arguments,
-    workingDirectory: workingDirectory,
-    mode: ProcessStartMode.detached,
+    workingDirectory: paths.rootPath,
   );
-  return process.pid;
-}
-
-Future<bool> _isPidRunning(int pid) async {
-  if (Platform.isWindows) {
-    final result = await Process.run('tasklist', [
-      '/FI',
-      'PID eq $pid',
-      '/NH',
-      '/FO',
-      'CSV',
-    ]);
-    if (result.exitCode != 0) {
-      return false;
+  final deadline = DateTime.now().add(readinessTimeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final live = await queryWatcher(paths);
+    final lastHealth = readControlJson(paths, 'watcher-health.json');
+    if (live == null &&
+        lastHealth?['pid'] == child &&
+        lastHealth?['phase'] == 'failed') {
+      print('[DMC] Watcher startup failed. Run dmc doctor for details.');
+      return 1;
     }
-
-    final output = (result.stdout as String).trim();
-    return output.isNotEmpty &&
-        !output.startsWith('INFO:') &&
-        output.contains('"$pid"');
+    if (live != null) {
+      if (live['pid'] != child) {
+        print(
+          '[DMC] Another watcher owns this workspace; no duplicate started.',
+        );
+        return 1;
+      }
+      if (live['ready'] == true) {
+        print(
+          '[DMC] Ready: background watcher established its baseline (PID: $child).',
+        );
+        return 0;
+      }
+      if (live['phase'] == 'failed' || live['phase'] == 'degraded') {
+        await queryWatcher(paths, stop: true);
+        print('[DMC] Watcher could not establish protection. Run dmc doctor.');
+        return 1;
+      }
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
   }
-
-  final result = await Process.run('ps', ['-p', '$pid', '-o', 'pid=']);
-  if (result.exitCode != 0) {
-    return false;
-  }
-
-  return (result.stdout as String).trim() == '$pid';
+  // A slow baseline may still be running. Do not kill it or report success.
+  print(
+    '[DMC] Readiness timed out. Run dmc status; use dmc stop to cancel a running baseline.',
+  );
+  return 1;
 }
 
-bool _killPid(int pid) {
-  return Process.killPid(pid);
+Future<int> stopDaemon({
+  String? basePath,
+  DaemonPlatform? platform,
+  Duration drainTimeout = const Duration(seconds: 30),
+}) async {
+  final paths = DmcPaths(basePath: basePath);
+  final live = await queryWatcher(paths);
+  if (live == null) {
+    print(
+      '[DMC] No authenticated watcher is running. Legacy/stale PID files are not used to terminate processes.',
+    );
+    return 1;
+  }
+  final metadata = readControlJson(paths, 'watcher-control.json');
+  if (await queryWatcher(paths, stop: true) == null) {
+    print('[DMC] Watcher did not accept the stop request.');
+    return 1;
+  }
+  final deadline = DateTime.now().add(drainTimeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final current = readControlJson(paths, 'watcher-control.json');
+    if (current == null || current['token'] != metadata?['token']) {
+      final health = readControlJson(paths, 'watcher-health.json');
+      if (health?['phase'] != 'stopped') {
+        print('[DMC] Watcher stopped with unresolved errors. Run dmc doctor.');
+        return 1;
+      }
+      print('[DMC] Stopped watcher after pending captures finished.');
+      return 0;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  print(
+    '[DMC] Stop is still draining or was interrupted; run dmc status and dmc doctor. No process was forcibly killed.',
+  );
+  return 1;
 }

@@ -6,15 +6,51 @@ const String tombstoneHash = 'TOMBSTONE';
 const String tombstoneSnapshotPath = '__TOMBSTONE__';
 
 bool isTombstoneSnapshot({required String hash, required String snapshotPath}) {
-  return hash == tombstoneHash || snapshotPath == tombstoneSnapshotPath;
+  return hash == tombstoneHash && snapshotPath == tombstoneSnapshotPath;
 }
 
 /// Database manager for DMC's SQLite storage
 class DmcDatabase {
+  static const schemaVersion = 3;
   final String dbPath;
   Database? _db;
+  Directory? _readCopy;
 
   DmcDatabase(this.dbPath);
+
+  /// Open an isolated read copy without touching source SQLite sidecars.
+  /// Caller must hold the workspace lock and ensure its watcher is stopped.
+  void openReadOnly() {
+    if (_db != null) throw StateError('Database is already open.');
+    try {
+      // Even a SQLite read-only connection can create/change WAL shared memory.
+      // Copy the stable database and WAL, never the transient shared-memory file.
+      _readCopy = Directory.systemTemp.createTempSync('dmc-recovery-preview-');
+      final copyPath = p.join(_readCopy!.path, 'metadata.db');
+      for (final suffix in ['', '-wal']) {
+        final source = '$dbPath$suffix';
+        final type = FileSystemEntity.typeSync(source, followLinks: false);
+        if (suffix.isNotEmpty && type == FileSystemEntityType.notFound) {
+          continue;
+        }
+        if (type != FileSystemEntityType.file) {
+          throw StateError('Recovery metadata must be a regular file.');
+        }
+        File(source).copySync('$copyPath$suffix');
+      }
+      _db = sqlite3.open(copyPath, mode: OpenMode.readOnly);
+      _db!.execute('PRAGMA query_only = ON');
+      final version = db.select('PRAGMA user_version').first.values.first;
+      if (version != schemaVersion) {
+        throw StateError(
+          'Recovery preview requires database schema $schemaVersion; found $version.',
+        );
+      }
+    } catch (_) {
+      close();
+      rethrow;
+    }
+  }
 
   /// Get the underlying database instance
   Database get db {
@@ -26,11 +62,59 @@ class DmcDatabase {
 
   /// Initialize the database and create tables if they don't exist
   void initialize() {
+    if (_db != null) return;
     _db = sqlite3.open(dbPath);
-    _db!.execute('PRAGMA journal_mode = WAL');
-    _db!.execute('PRAGMA synchronous = NORMAL');
-    _db!.execute('PRAGMA busy_timeout = 5000');
+    try {
+      _db!.execute('PRAGMA busy_timeout = 5000');
+      _db!.execute('PRAGMA foreign_keys = ON');
+      _db!.execute('PRAGMA synchronous = FULL');
+      transaction(() {
+        var version =
+            db.select('PRAGMA user_version').first.values.first as int;
+        if (version > schemaVersion) {
+          throw StateError(
+            'DMC database version $version is newer than supported version $schemaVersion.',
+          );
+        }
+        if (version < 1) {
+          _migrateToVersion1();
+          db.execute('PRAGMA user_version = 1');
+          version = 1;
+        }
+        if (version < 2) {
+          _migrateToVersion2();
+          db.execute('PRAGMA user_version = 2');
+          version = 2;
+        }
+        if (version < 3) {
+          _migrateToVersion3();
+          db.execute('PRAGMA user_version = 3');
+        }
+      });
+      _db!.execute('PRAGMA journal_mode = WAL');
+    } catch (_) {
+      close();
+      rethrow;
+    }
+  }
 
+  /// Run synchronous metadata work atomically. Do not pass an async callback.
+  T transaction<T>(T Function() action) {
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final result = action();
+      if (result is Future) {
+        throw ArgumentError('Transactions must be synchronous.');
+      }
+      db.execute('COMMIT');
+      return result;
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  void _migrateToVersion1() {
     _db!.execute('''
       CREATE TABLE IF NOT EXISTS history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,10 +193,140 @@ class DmcDatabase {
     }
   }
 
+  void _migrateToVersion2() {
+    _db!.execute('''
+      CREATE TABLE checkpoints (
+        id TEXT PRIMARY KEY,
+        label TEXT,
+        source TEXT NOT NULL CHECK(length(source) > 0),
+        status TEXT NOT NULL CHECK(status IN
+          ('creating', 'open', 'closing', 'closed', 'invalid', 'released')),
+        manifest_version INTEGER NOT NULL CHECK(manifest_version = 1),
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        released_at INTEGER,
+        policy_fingerprint TEXT NOT NULL,
+        fatal_error_count INTEGER NOT NULL DEFAULT 0 CHECK(fatal_error_count >= 0),
+        exclusion_count INTEGER NOT NULL DEFAULT 0 CHECK(exclusion_count >= 0)
+      )
+    ''');
+    _db!.execute('''
+      CREATE UNIQUE INDEX one_active_checkpoint
+      ON checkpoints ((1))
+      WHERE status IN ('creating', 'open', 'closing')
+    ''');
+    _db!.execute('''
+      CREATE TABLE checkpoint_files (
+        checkpoint_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        before_kind TEXT NOT NULL CHECK(before_kind IN ('file', 'absent')),
+        before_snapshot_id INTEGER,
+        before_hash TEXT,
+        after_kind TEXT CHECK(after_kind IS NULL OR after_kind IN ('file', 'absent')),
+        after_snapshot_id INTEGER,
+        after_hash TEXT,
+        change_kind TEXT CHECK(change_kind IS NULL OR change_kind IN
+          ('unchanged', 'modified', 'created', 'deleted')),
+        PRIMARY KEY (checkpoint_id, file_path),
+        FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE,
+        FOREIGN KEY (before_snapshot_id) REFERENCES history(id) ON DELETE RESTRICT,
+        FOREIGN KEY (after_snapshot_id) REFERENCES history(id) ON DELETE RESTRICT,
+        CHECK((before_kind = 'file' AND before_hash IS NOT NULL)
+          OR (before_kind = 'absent' AND before_snapshot_id IS NULL AND before_hash IS NULL)),
+        CHECK(after_kind IS NULL
+          OR (after_kind = 'file' AND after_hash IS NOT NULL)
+          OR (after_kind = 'absent' AND after_snapshot_id IS NULL AND after_hash IS NULL))
+      )
+    ''');
+    _db!.execute('''
+      CREATE TABLE checkpoint_issues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        checkpoint_id TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK(phase IN ('begin', 'close')),
+        file_path TEXT,
+        code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        fatal INTEGER NOT NULL CHECK(fatal IN (0, 1)),
+        FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE
+      )
+    ''');
+    _db!.execute(
+      'CREATE INDEX checkpoint_issues_checkpoint ON checkpoint_issues(checkpoint_id, fatal)',
+    );
+  }
+
+  void _migrateToVersion3() {
+    _db!.execute(
+      'ALTER TABLE checkpoint_files ADD COLUMN before_mode INTEGER CHECK(before_mode IS NULL OR before_mode BETWEEN 0 AND 511)',
+    );
+    _db!.execute(
+      'ALTER TABLE checkpoint_files ADD COLUMN after_mode INTEGER CHECK(after_mode IS NULL OR after_mode BETWEEN 0 AND 511)',
+    );
+    _db!.execute('''
+      CREATE TABLE checkpoint_operations (
+        id TEXT PRIMARY KEY,
+        checkpoint_id TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK(direction IN ('restore', 'redo')),
+        status TEXT NOT NULL CHECK(status IN
+          ('planned', 'applying', 'completed', 'failed',
+           'rolling_back', 'rolled_back')),
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        failure_message TEXT,
+        FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE RESTRICT
+      )
+    ''');
+    _db!.execute('''
+      CREATE INDEX checkpoint_operations_checkpoint
+      ON checkpoint_operations(checkpoint_id, created_at, id)
+    ''');
+    _db!.execute('''
+      CREATE TABLE checkpoint_operation_files (
+        operation_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK(sequence >= 0),
+        file_path TEXT NOT NULL,
+        expected_kind TEXT NOT NULL CHECK(expected_kind IN ('file', 'absent')),
+        expected_hash TEXT,
+        expected_mode INTEGER CHECK(expected_mode IS NULL OR expected_mode BETWEEN 0 AND 511),
+        intended_kind TEXT NOT NULL CHECK(intended_kind IN ('file', 'absent')),
+        intended_snapshot_id INTEGER,
+        intended_hash TEXT,
+        intended_mode INTEGER CHECK(intended_mode IS NULL OR intended_mode BETWEEN 0 AND 511),
+        pre_kind TEXT NOT NULL CHECK(pre_kind IN ('file', 'absent')),
+        pre_snapshot_id INTEGER,
+        pre_hash TEXT,
+        pre_mode INTEGER CHECK(pre_mode IS NULL OR pre_mode BETWEEN 0 AND 511),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'applied', 'rolled_back')),
+        error TEXT,
+        recovery_name TEXT NOT NULL,
+        PRIMARY KEY (operation_id, file_path),
+        UNIQUE (operation_id, sequence),
+        FOREIGN KEY (operation_id) REFERENCES checkpoint_operations(id) ON DELETE CASCADE,
+        FOREIGN KEY (intended_snapshot_id) REFERENCES history(id) ON DELETE RESTRICT,
+        FOREIGN KEY (pre_snapshot_id) REFERENCES history(id) ON DELETE RESTRICT,
+        CHECK((expected_kind = 'file' AND expected_hash IS NOT NULL)
+          OR (expected_kind = 'absent' AND expected_hash IS NULL
+              AND expected_mode IS NULL)),
+        CHECK((intended_kind = 'file' AND intended_hash IS NOT NULL)
+          OR (intended_kind = 'absent' AND intended_snapshot_id IS NULL
+              AND intended_hash IS NULL AND intended_mode IS NULL)),
+        CHECK((pre_kind = 'file' AND pre_hash IS NOT NULL)
+          OR (pre_kind = 'absent' AND pre_snapshot_id IS NULL
+              AND pre_hash IS NULL AND pre_mode IS NULL))
+      )
+    ''');
+  }
+
   /// Close the database connection
   void close() {
     _db?.close();
     _db = null;
+    final readCopy = _readCopy;
+    _readCopy = null;
+    if (readCopy != null && readCopy.existsSync()) {
+      readCopy.deleteSync(recursive: true);
+    }
   }
 
   /// Check if the history table exists
@@ -453,8 +667,12 @@ class DmcDatabase {
     String? failureMessage,
     int? overwrittenSnapshotId,
   }) {
+    // Legacy databases retain a required command_name column.
+    final legacy = db
+        .select('PRAGMA table_info(restore_events)')
+        .any((row) => row['name'] == 'command_name');
     _db!.execute(
-      'INSERT INTO restore_events (timestamp, command, file_path, snapshot_id, success, failure_message, overwritten_snapshot_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO restore_events (timestamp, command, file_path, snapshot_id, success, failure_message, overwritten_snapshot_id${legacy ? ', command_name' : ''}) VALUES (?, ?, ?, ?, ?, ?, ?${legacy ? ', ?' : ''})',
       [
         timestamp,
         command,
@@ -463,6 +681,7 @@ class DmcDatabase {
         success ? 1 : 0,
         failureMessage,
         overwrittenSnapshotId,
+        if (legacy) command,
       ],
     );
   }
@@ -556,6 +775,23 @@ class DmcDatabase {
       SELECT id, snapshot_path, hash
       FROM history
       WHERE timestamp < ?
+        AND NOT EXISTS (SELECT 1 FROM marks WHERE marks.burst_id = history.burst_id)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM checkpoint_files cf
+          JOIN checkpoints c ON c.id = cf.checkpoint_id
+          WHERE c.status != 'released'
+            AND (cf.before_snapshot_id = history.id OR cf.after_snapshot_id = history.id)
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM checkpoint_operation_files cof
+          JOIN checkpoint_operations co ON co.id = cof.operation_id
+          JOIN checkpoints c ON c.id = co.checkpoint_id
+          WHERE c.status != 'released'
+            AND (cof.intended_snapshot_id = history.id
+              OR cof.pre_snapshot_id = history.id)
+        )
         AND id NOT IN (
           SELECT snapshot_id FROM restore_events
           UNION
@@ -578,46 +814,60 @@ class DmcDatabase {
         .toList();
   }
 
-  /// Delete snapshots and history rows older than [maxAge].
-  Future<int> pruneOldSnapshots(Duration maxAge) async {
+  /// Detach eligible rows before removing blobs. Interrupted cleanup leaves
+  /// orphan files, never committed rows pointing at files removed by GC.
+  /// [deleteFile] permits callers to provide their filesystem deletion policy.
+  Future<int> pruneOldSnapshots(
+    Duration maxAge, {
+    void Function(File file)? deleteFile,
+  }) async {
     if (_db == null) return 0;
-
-    final cutoff = DateTime.now().subtract(maxAge).millisecondsSinceEpoch;
-    final expiredRows = getExpiredSnapshotRecords(maxAge);
-
-    if (expiredRows.isEmpty) return 0;
-
     final snapshotsPath = p.join(p.dirname(dbPath), 'snapshots');
-
+    if (FileSystemEntity.typeSync(snapshotsPath, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw FileSystemException(
+        'GC refuses symlinked snapshot storage',
+        snapshotsPath,
+      );
+    }
+    final expiredRows = transaction(() {
+      final rows = getExpiredSnapshotRecords(maxAge);
+      for (final row in rows) {
+        db.execute('DELETE FROM history WHERE id = ?', [row.id]);
+      }
+      return rows;
+    });
+    final retained = getAllSnapshotRecords()
+        .map((row) => row.snapshotPath)
+        .toSet();
+    final removed = <String>{};
     for (final row in expiredRows) {
       final snapshotPath = row.snapshotPath;
       if (isTombstoneSnapshot(hash: row.hash, snapshotPath: snapshotPath)) {
         continue;
       }
-
+      if (retained.contains(snapshotPath) || !removed.add(snapshotPath)) {
+        continue;
+      }
+      // Legacy names are flat filenames. Never unlink an arbitrary metadata path.
+      if (p.basename(snapshotPath) != snapshotPath ||
+          snapshotPath.contains('\\') ||
+          snapshotPath == '.' ||
+          snapshotPath == '..') {
+        print('[DMC] GC left invalid snapshot path for doctor: $snapshotPath');
+        continue;
+      }
       final snapshotFile = File(p.join(snapshotsPath, snapshotPath));
-
       try {
-        await snapshotFile.delete();
-      } on FileSystemException {
-        // Ignore missing or manually deleted snapshot files.
+        if (deleteFile != null) {
+          deleteFile(snapshotFile);
+        } else if (snapshotFile.existsSync()) {
+          snapshotFile.deleteSync();
+        }
+      } on FileSystemException catch (e) {
+        print('[DMC] GC left orphan $snapshotPath: $e');
       }
     }
-
-    _db!.execute(
-      '''
-      DELETE FROM history
-      WHERE timestamp < ?
-        AND id NOT IN (
-          SELECT snapshot_id FROM restore_events
-          UNION
-          SELECT overwritten_snapshot_id
-          FROM restore_events
-          WHERE overwritten_snapshot_id IS NOT NULL
-        )
-      ''',
-      [cutoff],
-    );
     return expiredRows.length;
   }
 }

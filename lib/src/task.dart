@@ -11,36 +11,38 @@ String? readActiveTaskSync({String? basePath}) {
   return value.isEmpty ? null : value;
 }
 
-Future<void> startTask(String name, {String? basePath}) async {
+Future<int> startTask(String name, {String? basePath}) async {
   final trimmedName = name.trim();
   if (trimmedName.isEmpty) {
     print('[DMC] Error: Task name cannot be empty.');
-    return;
+    return 1;
   }
 
   final paths = DmcPaths(basePath: basePath);
   if (!await paths.dmcDirectory.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return 1;
   }
 
   await paths.activeTaskFile.writeAsString(trimmedName);
   print('[DMC] Active task: $trimmedName');
+  return 0;
 }
 
-Future<void> endTask({String? basePath}) async {
+Future<int> endTask({String? basePath}) async {
   final paths = DmcPaths(basePath: basePath);
   if (!await paths.dmcDirectory.exists()) {
     print('[DMC] Error: DMC not initialized. Run "dmc init" first.');
-    return;
+    return 1;
   }
 
   if (!await paths.activeTaskFile.exists()) {
     print('[DMC] No active task to end.');
-    return;
+    return 0;
   }
 
   final previousTask = (await paths.activeTaskFile.readAsString()).trim();
   await paths.activeTaskFile.delete();
   print('[DMC] Ended task: $previousTask');
+  return 0;
 }

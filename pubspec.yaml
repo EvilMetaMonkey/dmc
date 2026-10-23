@@ -1,6 +1,6 @@
 name: dmc
 description: A local shadow-history version control tool for AI-assisted coding.
-version: 1.0.0
+version: 1.1.0-dev.5.1
 repository: https://github.com/EvilMetaMonkey/dmc
 issue_tracker: https://github.com/EvilMetaMonkey/dmc/issues
 

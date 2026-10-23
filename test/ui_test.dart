@@ -149,46 +149,97 @@ void main() {
 
     test('splash delorean art matches the traced reference lines', () {
       final art = buildSplashDeloreanArt();
-      final expected = <String>[
-        r"                    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”",
-        r"               â”Œâ”€â”€â”€â”€â”¤â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â”‚â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â”œâ”€â”€â”€â”€â”",
-        r"            â”Œâ”€â”€â”¤â–’â–’â”‚â–‘â–‘â•²         â”‚         â•±â–‘â–‘â”‚â–’â–’â”œâ”€â”€â”",
-        r"          â•­â”€â”¤â–’â–’â”‚â–’â–’â”‚â–‘â–‘â”‚   â”Œâ”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”   â”‚â–‘â–‘â”‚â–’â–’â”‚â–’â–’â”œâ”€â•®",
-        r"        â•±  â”‚â–’â–’â”‚â–’â–’â”‚â–‘â–‘â”‚   â”‚ â”Œâ”€â”€â”€â”€â”€â”€â” â”‚   â”‚â–‘â–‘â”‚â–’â–’â”‚â–’â–’â”‚  â•²",
-        r"       â”‚   â”‚â–’â–’â”‚â–’â–’â”‚â–‘â–‘â”‚   â”‚ â”‚      â”‚ â”‚   â”‚â–‘â–‘â”‚â–’â–’â”‚â–’â–’â”‚   â”‚",
-        r"       â”‚   â”‚â–’â–’â”‚â–’â–’â”‚â–‘â–‘â”‚   â”‚ â”‚ DMC  â”‚ â”‚   â”‚â–‘â–‘â”‚â–’â–’â”‚â–’â–’â”‚   â”‚",
-        r"       â”‚   â”‚â–’â–’â”‚â–’â–’â”‚â–‘â–‘â”‚   â”‚ â””â”€â”€â”€â”€â”€â”€â”˜ â”‚   â”‚â–‘â–‘â”‚â–’â–’â”‚â–’â–’â”‚   â”‚",
-        r"       â”‚   â”‚â–’â–’â”‚â–’â–’â”‚â–‘â–‘â”‚ â”Œâ”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â” â”‚â–‘â–‘â”‚â–’â–’â”‚â–’â–’â”‚   â”‚",
-        r"       â”‚â–„â–„â–„â””â”€â”€â”´â”€â”€â”´â”€â”€â”´â”€â”¤    â”Œâ”€â”€â”€â”€â”    â”œâ”€â”´â”€â”€â”´â”€â”€â”´â”€â”€â”˜â–„â–„â–„â”‚",
-        r"       â”‚â–ˆâ–ˆâ•â•â•â•â•â•â•â•â•â•â•â•â”‚    â”‚ DMCâ”‚    â”‚â•â•â•â•â•â•â•â•â•â•â•â•â–ˆâ–ˆâ”‚",
-        r"       â”‚â–„â–„â•â•â•â•â•â•â•â•â•â•â•â•â”‚____â””â”€â”€â”€â”€â”˜____â”‚â•â•â•â•â•â•â•â•â•â•â•â•â–„â–„â”‚",
-        r"       â•°â”€â”                                          â”Œâ”€â•¯",
-        r"         â•°â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â•²              â•±â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â•¯",
-      ];
-      for (var i = 0; i < 5; i++) {
-        expected[i] = expected[i].substring(1);
-      }
-
       expect(art.map((line) => line.length).toSet(), hasLength(1));
       expect(
         art.map((line) => line.trimRight()).toList(),
         equals([
-          r"                   ┌──────────────┬──────────────┐",
-          r"              ┌────┤░░░░░░░░░░░░░│░░░░░░░░░░░░░├────┐",
-          r"           ┌──┤▒▒│░░╲         │         ╱░░│▒▒├──┐",
-          r"         ╭─┤▒▒│▒▒│░░│   ┌─────┴─────┐   │░░│▒▒│▒▒├─╮",
-          r"       ╱  │▒▒│▒▒│░░│   │ ┌──────┐ │   │░░│▒▒│▒▒│  ╲",
-          r"       │   │▒▒│▒▒│░░│   │ │      │ │   │░░│▒▒│▒▒│   │",
-          r"       │   │▒▒│▒▒│░░│   │ │ DMC  │ │   │░░│▒▒│▒▒│   │",
-          r"       │   │▒▒│▒▒│░░│   │ └──────┘ │   │░░│▒▒│▒▒│   │",
-          r"       │   │▒▒│▒▒│░░│ ┌─┴──────────┴─┐ │░░│▒▒│▒▒│   │",
-          r"       │▄▄▄└──┴──┴──┴─┤    ┌────┐    ├─┴──┴──┴──┘▄▄▄│",
-          r"       │██════════════│    │ DMC│    │════════════██│",
-          r"       │▄▄════════════│____└────┘____│════════════▄▄│",
-          r"       ╰─┐                                          ┌─╯",
-          r"         ╰─────────────╲              ╱─────────────╯",
+          r"               /\                                             /\",
+          r"              /  \_________                         _________/  \",
+          r"             /   /         \                       /         \   \",
+          r"            /   /           \                     /           \   \",
+          r"           /___/             \                   /             \___\",
+          r"               \              \_________________/              /",
+          r"                \_____   _______________________________  _____/",
+          r"                      \ [                               ] /",
+          r"                  ___  \[     D E L O R E A N           ]/  ___",
+          r"                 /   \  |  ===========================  |  /   \",
+          r"                | [=] | | [■ ■]      | DMC |      [■ ■] | | [=] |",
+          r"                 \___/  |_______|_______________|_______|  \___/",
+          r"                        (O)                           (O)",
+          r"                         \=============================/",
         ]),
       );
+    });
+
+    test('splash menu supports left and right column navigation', () {
+      final controller = DmcUiController([
+        const DmcUiHistoryEntry(
+          snapshotId: 1,
+          filePath: 'alpha.txt',
+          snapshotPath: 'alpha_1.bak',
+          timestamp: 100,
+          burstId: 10,
+        ),
+      ]);
+
+      expect(controller.state.splashSelectedIndex, 0);
+
+      // Move right from col 0 to col 1 (Fast Restore)
+      controller.handleInput(DmcUiInput.right);
+      expect(controller.state.splashSelectedIndex, 4);
+      expect(controller.state.selectedMenuItem.label, contains('Fast Restore'));
+
+      // Move left back to col 0 (Start Daemon)
+      controller.handleInput(DmcUiInput.left);
+      expect(controller.state.splashSelectedIndex, 0);
+
+      // Move down in col 0 to Status
+      controller.handleInput(DmcUiInput.down);
+      expect(controller.state.splashSelectedIndex, 1);
+
+      // Move right to Configure
+      controller.handleInput(DmcUiInput.right);
+      expect(controller.state.splashSelectedIndex, 5);
+      expect(controller.state.selectedMenuItem.label, contains('Configure'));
+    });
+
+    test('direct hotkeys activate menu actions on splash', () {
+      final controller = DmcUiController([
+        const DmcUiHistoryEntry(
+          snapshotId: 1,
+          filePath: 'alpha.txt',
+          snapshotPath: 'alpha_1.bak',
+          timestamp: 100,
+          burstId: 10,
+        ),
+      ]);
+
+      // S -> Start Daemon
+      controller.handleInput(DmcUiInput.actionStartDaemon);
+      expect(controller.state.splashSelectedIndex, 0);
+      expect(controller.state.statusMessage, contains('dmc start'));
+
+      // T -> Status
+      controller.handleInput(DmcUiInput.actionStatusVaults);
+      expect(controller.state.splashSelectedIndex, 1);
+      expect(controller.state.statusMessage, contains('dmc status'));
+
+      // C -> Configure
+      controller.handleInput(DmcUiInput.actionConfigure);
+      expect(controller.state.splashSelectedIndex, 5);
+      expect(controller.state.statusMessage, contains('config.json'));
+
+      // L -> View History (Dashboard)
+      controller.handleInput(DmcUiInput.actionViewHistory);
+      expect(controller.state.view, DmcUiView.dashboard);
+
+      // Back to splash
+      controller.handleInput(DmcUiInput.back);
+      expect(controller.state.view, DmcUiView.splash);
+
+      // U -> Launch Dashboard
+      controller.handleInput(DmcUiInput.actionLaunchDashboard);
+      expect(controller.state.view, DmcUiView.dashboard);
     });
   });
 }
