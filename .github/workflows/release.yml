@@ -9,15 +9,18 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
   build-macos-intel:
+    needs: verify
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          sdk: '3.11.5'
       - name: Get dependencies
-        run: dart pub get
+        run: dart pub get --enforce-lockfile
       - name: Build CLI bundle
         run: dart build cli -o build/dmc
       - name: Package
@@ -31,14 +34,15 @@ jobs:
           path: build/dmc-*.tar.gz
 
   build-macos-arm:
+    needs: verify
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          sdk: '3.11.5'
       - name: Get dependencies
-        run: dart pub get
+        run: dart pub get --enforce-lockfile
       - name: Build CLI bundle
         run: dart build cli -o build/dmc
       - name: Package
@@ -52,14 +56,15 @@ jobs:
           path: build/dmc-*.tar.gz
 
   build-linux:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          sdk: '3.11.5'
       - name: Get dependencies
-        run: dart pub get
+        run: dart pub get --enforce-lockfile
       - name: Build CLI bundle
         run: dart build cli -o build/dmc
       - name: Package
@@ -73,14 +78,15 @@ jobs:
           path: build/dmc-*.tar.gz
 
   build-windows:
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          sdk: '3.11.5'
       - name: Get dependencies
-        run: dart pub get
+        run: dart pub get --enforce-lockfile
       - name: Build CLI bundle
         run: dart build cli -o build/dmc
       - name: Package
