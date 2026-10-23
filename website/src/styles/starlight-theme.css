@@ -1,0 +1,86 @@
+/* ============================================================
+   dmc + Haven — Starlight theme overrides
+   Palette: deep-space slate, flux cyan, time-circuit amber.
+   Forced dark-first: both Starlight themes are overridden.
+   ============================================================ */
+
+:root,
+:root[data-theme='light'],
+:root[data-theme='dark'] {
+  /* Accent ramp (flux cyan) */
+  --sl-color-accent-low: #083344;
+  --sl-color-accent: #22d3ee;
+  --sl-color-accent-high: #a5f3fc;
+
+  /* Surfaces (deep slate) */
+  --sl-color-bg: #0b0e14;
+  --sl-color-bg-nav: rgba(11, 14, 20, 0.92);
+  --sl-color-bg-sidebar: #0d1119;
+  --sl-color-bg-inline-code: #161d2e;
+  --sl-color-bg-accent: #083344;
+  --sl-color-hairline: #1d2739;
+  --sl-color-hairline-light: #1d2739;
+  --sl-color-hairline-shade: #121826;
+
+  /* Text */
+  --sl-color-white: #e9eef7;
+  --sl-color-gray-1: #cbd5e1;
+  --sl-color-gray-2: #9aa7bd;
+  --sl-color-gray-3: #6b7891;
+  --sl-color-gray-4: #47536b;
+  --sl-color-gray-5: #24304a;
+  --sl-color-gray-6: #141b2b;
+  --sl-color-black: #0b0e14;
+  --sl-color-text: #cbd5e1;
+  --sl-color-text-accent: #67e8f9;
+  --sl-color-text-invert: #06222b;
+
+  /* Typography */
+  --sl-font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --sl-font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular,
+    Menlo, Consolas, 'Liberation Mono', monospace;
+  --sl-text-code: 0.875rem;
+}
+
+/* Hide the light/dark toggle: this preview is dark-first. */
+starlight-theme-select {
+  display: none;
+}
+
+/* Link underlines */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-decoration-color: #2c3a55;
+}
+.sl-markdown-content a:hover:not(:where(.not-content *)) {
+  text-decoration-color: #22d3ee;
+}
+
+/* Code blocks */
+.expressive-code .frame {
+  --code-background: #0d1220;
+}
+.sl-markdown-content code:not(:where(.not-content *)) {
+  border: 1px solid #1d2739;
+  border-radius: 4px;
+}
+
+/* Sidebar: section labels get the mono treatment */
+.sidebar-content .group-label span {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7891;
+}
+
+/* Asides keep their hue but fit the page background */
+.sl-markdown-content .starlight-aside {
+  background-color: #0f1626;
+  border-inline-start-color: var(--sl-color-asides-border);
+}
+
+/* Tables */
+.sl-markdown-content table {
+  font-size: 0.9rem;
+}

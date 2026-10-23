@@ -1,0 +1,36 @@
+---
+export interface TermLine {
+  kind?:
+    | 'cmd'
+    | 'out'
+    | 'ok'
+    | 'warn'
+    | 'err'
+    | 'note'
+    | 'cyan'
+    | 'dim'
+    | 'blank';
+  text?: string;
+}
+
+interface Props {
+  title?: string;
+  badge?: string;
+  lines: TermLine[];
+}
+
+const { title = 'dmc — session output', badge, lines } = Astro.props;
+---
+
+<figure class="term">
+  <div class="term-bar">
+    <span class="term-dots"><i class="d1"></i><i class="d2"></i><i class="d3"></i></span>
+    <span class="term-title">{title}</span>
+    {badge && <span class="term-badge">{badge}</span>}
+  </div>
+  <pre class="term-body">{lines.map((line) =>
+    line.kind === 'blank'
+      ? <span class="t-blank">{'\n'}</span>
+      : <span class={line.kind === 'cmd' ? 't-cmd' : `t-${line.kind ?? 'out'}`}>{line.text}{'\n'}</span>
+  )}</pre>
+</figure>

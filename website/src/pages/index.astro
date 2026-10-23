@@ -1,0 +1,371 @@
+---
+import Marketing from '../layouts/Marketing.astro';
+import Terminal from '../components/Terminal.astro';
+import type { TermLine } from '../components/Terminal.astro';
+
+// Real output captured from dmc 1.1.0-dev.5.1 (compiled from the dmc repo).
+const heroLines: TermLine[] = [
+  { kind: 'cmd', text: 'dmc checkpoint begin --label "refactor auth" --source haven' },
+  { kind: 'ok', text: '[DMC] Checkpoint cp_multkh31_41610e58eb6be988e7c1a3927755c4d0: open' },
+  { kind: 'out', text: 'Protected files: 3; changed files: 0; exclusions: 1; fatal errors: 0' },
+  { kind: 'cyan', text: 'Checkpoint is open. Agent work may begin.' },
+  { kind: 'blank' },
+  { kind: 'note', text: '# …the agent edits src/auth.js, deletes README.md, adds src/routes.js…' },
+  { kind: 'blank' },
+  { kind: 'cmd', text: 'dmc checkpoint close $CP' },
+  { kind: 'ok', text: '[DMC] Checkpoint cp_multkh31_41610e58eb6be988e7c1a3927755c4d0: closed' },
+  { kind: 'out', text: 'Protected files: 3; changed files: 3; exclusions: 2; fatal errors: 0' },
+  { kind: 'ok', text: 'Checkpoint closed with a verified post-run manifest.' },
+  { kind: 'blank' },
+  { kind: 'cmd', text: 'dmc checkpoint diff $CP' },
+  { kind: 'err', text: 'deleted:  README.md' },
+  { kind: 'warn', text: 'modified: src/auth.js' },
+  { kind: 'ok', text: 'created:  src/routes.js' },
+  { kind: 'blank' },
+  { kind: 'cmd', text: 'dmc checkpoint restore $CP' },
+  { kind: 'cyan', text: '[DMC] Checkpoint restore preview' },
+  { kind: 'out', text: 'Files: 3' },
+  { kind: 'dim', text: 'Preview only. Re-run with --apply to change the workspace.' },
+];
+
+const dmcIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10" stroke="#fbbf24"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" stroke="#22d3ee"></path></svg>`;
+const havenIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 3l9 8v10H3Zm5 10v-8h8v8M8 8v5m8-5v5"></path></svg>`;
+---
+
+<Marketing
+  title="dmc + Haven — rollback for AI coding agents"
+  description="dmc is a local shadow-history vault that shadows file changes and restores verified checkpoints. Haven is the VS Code review cockpit for local models. No cloud. No telemetry. Git stays clean."
+>
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="pulse"></span> Development preview · invited trials</p>
+        <h1 class="hero-title">
+          Roll back what the agent wrote.<br />
+          <span class="grad">Before you commit.</span>
+        </h1>
+        <p class="hero-lede">
+          <strong>dmc</strong> shadows eligible file changes into a repo-local vault and
+          restores verified checkpoints of a whole agent run. <strong>Haven</strong> is the
+          cockpit: it proposes edits with local models, waits for your approval, and
+          recovers through dmc. No cloud, no telemetry, Git stays clean.
+        </p>
+        <div class="hero-ctas">
+          <a class="btn primary" href="/docs/">Read the docs</a>
+          <a class="btn ghost" href="/docs/status/">Get an invited trial</a>
+        </div>
+        <p class="hero-fine">
+          macOS arm64 locally verified · CI matrix for macOS, Linux, Windows
+        </p>
+      </div>
+      <div class="hero-term">
+        <Terminal
+          title="dmc 1.1.0-dev.5.1 — real captured output"
+          badge="live output"
+          lines={heroLines}
+        />
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="products">
+    <div class="wrap">
+      <p class="kicker">The suite</p>
+      <h2 class="band-title">One safety system. Two halves.</h2>
+      <p class="band-lede">
+        dmc records and restores. Haven reviews and approves. They meet at a
+        versioned subprocess contract — no shared database, no hidden coupling —
+        so either tool works alone.
+      </p>
+
+      <div class="products-grid">
+        <article class="pcard dmc">
+          <div class="pcard-head">
+            <span class="pcard-icon" set:html={dmcIcon}></span>
+            <div>
+              <h3>dmc</h3>
+              <p class="pcard-role">Recovery engine · Dart CLI</p>
+            </div>
+          </div>
+          <p class="pdesc">
+            A local shadow-history vault that sits beside your editor. It captures
+            eligible file versions, verifies whole-run checkpoint manifests, and
+            restores them — with previews as the default.
+          </p>
+          <ul>
+            <li>Snapshots eligible text files into a repo-local <code>.dmc/</code> vault</li>
+            <li>Verified before/after manifests for one agent run</li>
+            <li>Preview-first restore and redo; conflicts block the whole operation</li>
+            <li>Journaled apply — interrupted runs resume or roll back</li>
+            <li>Single-file history, diffs, marks, and a terminal UI</li>
+          </ul>
+          <div class="pfoot">
+            <span>dmc 1.1.0-dev.5.1</span>
+            <span>macOS · Linux · Windows</span>
+          </div>
+        </article>
+
+        <article class="pcard haven">
+          <div class="pcard-head">
+            <span class="pcard-icon" set:html={havenIcon}></span>
+            <div>
+              <h3>Haven</h3>
+              <p class="pcard-role">Review cockpit · VS Code extension</p>
+            </div>
+          </div>
+          <p class="pdesc">
+            Local model proposals with reviewed edits. Haven asks a model on your
+            machine, shows the diff, and only touches files after explicit
+            approval — through dmc checkpoints that can be restored.
+          </p>
+          <ul>
+            <li>Talks to your local LM Studio endpoint over loopback only</li>
+            <li>Proposals arrive as diffs; nothing applies without approval</li>
+            <li>Isolated pilot copies — the original project is read, never written</li>
+            <li>Restore, redo, resume, and roll back interrupted recovery</li>
+            <li>No telemetry; nothing leaves the machine</li>
+          </ul>
+          <div class="pfoot">
+            <span>Haven 0.7.5</span>
+            <span>VS Code preview VSIX</span>
+          </div>
+        </article>
+      </div>
+
+      <div class="bridge">
+        <span class="wire"></span>
+        <code>haven-checkpoint-v1</code>
+        <span class="wire"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="workflow">
+    <div class="wrap">
+      <p class="kicker">The loop</p>
+      <h2 class="band-title">Begin, work, close, preview, recover.</h2>
+      <p class="band-lede">
+        One checkpoint covers one serialized run — agent, formatter, or human.
+        Nothing is destructive until you re-run with <code>--apply</code>.
+      </p>
+      <div class="steps">
+        <div class="step">
+          <h4>Begin</h4>
+          <p>
+            <code>checkpoint begin</code> verifies the before-state of every
+            eligible file and refuses to open if anything is wrong.
+          </p>
+        </div>
+        <div class="step">
+          <h4>Work</h4>
+          <p>
+            The agent edits while dmc shadows each saved version into the local
+            vault. Excluded paths are reported, not hidden.
+          </p>
+        </div>
+        <div class="step">
+          <h4>Close &amp; inspect</h4>
+          <p>
+            <code>checkpoint close</code> records a verified after-manifest.
+            <code>diff</code> classifies modified, created, and deleted paths.
+          </p>
+        </div>
+        <div class="step">
+          <h4>Preview</h4>
+          <p>
+            <code>restore</code> previews by default. Drift since close stops
+            the operation before a single file changes.
+          </p>
+        </div>
+        <div class="step">
+          <h4>Apply or recover</h4>
+          <p>
+            Apply restores the before-state; <code>redo</code> brings the work
+            back. Interrupted runs resume or roll back from their journal.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="principles">
+    <div class="wrap">
+      <p class="kicker">Built on restraint</p>
+      <h2 class="band-title">Safety is a feature, not a setting.</h2>
+      <p class="band-lede">
+        Both tools follow the same rulebook: assume the worst moment is exactly
+        when recovery must work.
+      </p>
+      <div class="principles">
+        <div class="principle">
+          <span class="picon">⌂ local</span>
+          <h4>Local by construction</h4>
+          <p>
+            The vault lives in <code>.dmc/</code> and contains raw old bytes.
+            Nothing is uploaded, and neither tool ships telemetry.
+          </p>
+        </div>
+        <div class="principle">
+          <span class="picon">◉ preview</span>
+          <h4>Preview by default</h4>
+          <p>
+            Destructive steps require an explicit <code>--apply</code>.
+            Previews are read-only and change neither files nor journals.
+          </p>
+        </div>
+        <div class="principle">
+          <span class="picon">⊘ conflicts</span>
+          <h4>Conflict blocks everything</h4>
+          <p>
+            If any path drifted since the checkpoint closed, the whole
+            operation stops before writes — no partial guesses.
+          </p>
+        </div>
+        <div class="principle">
+          <span class="picon">⚠ fail-closed</span>
+          <h4>Fail closed</h4>
+          <p>
+            Missing or corrupt snapshots stop the work. Nothing is
+            auto-repaired, fuzzily matched, or silently skipped.
+          </p>
+        </div>
+        <div class="principle">
+          <span class="picon">⟲ journal</span>
+          <h4>Journaled recovery</h4>
+          <p>
+            Every apply writes a per-file journal before touching the
+            workspace, so an interrupted run is resumable or reversible.
+          </p>
+        </div>
+        <div class="principle">
+          <span class="picon">† honest</span>
+          <h4>Honest limits</h4>
+          <p>
+            Docs and UI state what is not protected — binaries, oversized
+            files, ignored paths, links — and what has not been verified.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="honesty">
+    <div class="wrap">
+      <p class="kicker">Straight answers</p>
+      <h2 class="band-title">What these tools will not do.</h2>
+      <p class="band-lede">
+        A recovery tool that oversells itself is worse than none. This is the
+        contract:
+      </p>
+      <div class="honesty">
+        <ul class="honesty-list">
+          <li>
+            <strong>Not a Git replacement</strong>
+            Git is source control and history. dmc is the safety net under the
+            risky edit before you commit — keep committing.
+          </li>
+          <li>
+            <strong>Cannot recover what it never saw</strong>
+            dmc records while it runs. An edit made before it started, or after
+            you stopped it, may not exist anywhere.
+          </li>
+          <li>
+            <strong>Not a backup</strong>
+            The vault lives on the same disk as the project. Deleting
+            <code>.dmc/</code> deletes the history. Keep independent backups.
+          </li>
+          <li>
+            <strong>Not proof of authorship</strong>
+            A checkpoint records an interval, not who caused each change inside
+            it — agent, formatter, or human.
+          </li>
+        </ul>
+        <div class="quote-box">
+          <blockquote>
+            “dmc records file contents while it is running, after its initial
+            baseline is ready. <em>It cannot recover an earlier version that it
+            never captured.</em>”
+          </blockquote>
+          <cite>— README, dmc 1.1.0-dev.5.1</cite>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="status">
+    <div class="wrap">
+      <p class="kicker">Honest status</p>
+      <h2 class="band-title">Where the builds actually stand.</h2>
+      <p class="band-lede">
+        Local test passes are not a public-release verdict. Check the results
+        for the exact revision you install.
+      </p>
+      <div class="status-grid">
+        <div class="stat">
+          <div class="label">dmc</div>
+          <div class="value amber">1.1.0-dev.5.1</div>
+          <div class="sub">Unreleased development preview</div>
+        </div>
+        <div class="stat">
+          <div class="label">Haven</div>
+          <div class="value amber">0.7.5</div>
+          <div class="sub">Preview VSIX for VS Code</div>
+        </div>
+        <div class="stat">
+          <div class="label">Distribution</div>
+          <div class="value">Invited trials</div>
+          <div class="sub">Exact archive + SHA-256 from the maintainer</div>
+        </div>
+      </div>
+      <table class="platforms">
+        <thead>
+          <tr><th>Platform</th><th>dmc status</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>macOS arm64</td>
+            <td><span class="pill ok">Verified locally</span></td>
+            <td>Compiled bundle + smoke + integration harness</td>
+          </tr>
+          <tr>
+            <td>macOS x86_64</td>
+            <td><span class="pill ci">CI + release bundles</span></td>
+            <td>Configured matrix on GitHub Actions</td>
+          </tr>
+          <tr>
+            <td>Linux x86_64</td>
+            <td><span class="pill ci">CI + release bundles</span></td>
+            <td>Configured matrix on GitHub Actions</td>
+          </tr>
+          <tr>
+            <td>Windows x86_64</td>
+            <td><span class="pill ci">CI + release bundles</span></td>
+            <td>Symlink tests may need Developer Mode</td>
+          </tr>
+          <tr>
+            <td>Licensing</td>
+            <td><span class="pill gate">Undecided</span></td>
+            <td>Preview builds do not grant an open-source license</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="wrap">
+      <h2>Bring your agent. Keep your escape hatch.</h2>
+      <p>
+        Start with the docs, get the exact build for your platform, and try the
+        fifteen-minute recovery walkthrough on a disposable folder.
+      </p>
+      <div class="hero-ctas">
+        <a class="btn primary" href="/docs/">Read the docs</a>
+        <a class="btn ghost" href="/docs/status/">How to get a build</a>
+      </div>
+    </div>
+  </section>
+</Marketing>
+
+
+

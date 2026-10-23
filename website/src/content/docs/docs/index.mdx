@@ -1,0 +1,57 @@
+---
+title: dmc + Haven documentation
+description: Local-first rollback and review for AI coding agents.
+template: splash
+hero:
+  title: dmc + Haven docs
+  tagline: A rollback safety net for AI coding agents. dmc is the recovery engine; Haven is the review cockpit.
+  actions:
+    - text: What is dmc?
+      link: /docs/dmc/
+      variant: primary
+    - text: What is Haven?
+      link: /docs/haven/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="dmc — recovery engine" icon="laptop">
+    A Dart CLI that shadows eligible file changes into a repo-local vault and
+    restores verified whole-run checkpoints. Preview-first, conflict-aware,
+    journaled.
+
+    [Read the dmc docs →](/docs/dmc/)
+  </Card>
+  <Card title="Haven — review cockpit" icon="rocket">
+    A VS Code extension that proposes edits with local models, waits for your
+    approval, and lands changes through dmc checkpoints.
+
+    [Read the Haven docs →](/docs/haven/)
+  </Card>
+  <Card title="Honest status" icon="information">
+    Development previews, invited trials only. Platform evidence, licensing
+    state, and how to get an exact build.
+
+    [Status &amp; support →](/docs/status/)
+  </Card>
+  <Card title="Integration contract" icon="puzzle">
+    The versioned, JSON subprocess contract (`haven-checkpoint-v1`) that lets
+    other tools drive dmc without reading its database.
+
+    [Read the contract →](/docs/imported/haven-integration/)
+  </Card>
+</CardGrid>
+
+## Start here
+
+- **New to the project?** Read [What is dmc?](/docs/dmc/) to understand the
+  model, then run the [getting started](/docs/dmc/getting-started/) steps on a
+  disposable folder.
+- **Reviewing this as a tester?** The
+  [tester walkthrough](/docs/imported/tester-walkthrough/) is a supervised
+  15-minute exercise.
+- **Building an integration?** Start with
+  `dmc capabilities --json --schema-version 1` and the
+  [Haven integration contract](/docs/imported/haven-integration/).

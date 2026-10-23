@@ -1,0 +1,21 @@
+{
+  "name": "dmc-haven-website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Website preview for dmc (recovery engine) and Haven (review cockpit).",
+  "scripts": {
+    "dev": "astro dev",
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "prebuild": "node scripts/sync-docs.mjs",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.4",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "astro": "^7.3.5"
+  }
+}
