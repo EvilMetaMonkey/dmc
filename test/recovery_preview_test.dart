@@ -19,7 +19,11 @@ Map<String, Object?> inventory(Directory root) => {
   for (final entry in root.listSync(recursive: true, followLinks: false))
     p.relative(entry.path, from: root.path): entry is File
         ? [
-            base64Encode(entry.readAsBytesSync()),
+            // Windows enforces byte-range locks on reads, so a held
+            // checkpoint.lock is fingerprinted by size instead of contents.
+            p.basename(entry.path) == 'checkpoint.lock'
+                ? 'lock:${entry.lengthSync()}'
+                : base64Encode(entry.readAsBytesSync()),
             entry.statSync().modified.toIso8601String(),
             entry.statSync().mode,
           ]
