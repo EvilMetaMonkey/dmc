@@ -4,7 +4,7 @@ Local file history for coding projects, including changes made by AI tools.
 
 dmc runs beside your editor, records eligible file versions in a local `.dmc/` folder, and lets you inspect, restore, and redo a selected version. It does not require a model, an AI subscription, or Haven.
 
-> **Development preview: `1.1.0-dev.5`. Use a disposable project first.** This revision can record, inspect, restore, and redo complete eligible pre/post checkpoint manifests with conflict checks, interrupted-operation recovery, and a finalized Haven machine contract. Keep Git commits and independent backups.
+> **Development preview: `1.1.0-dev.5.1`. Use a disposable project first.** This revision can record, inspect, restore, and redo complete eligible pre/post checkpoint manifests with conflict checks, interrupted-operation recovery, and a finalized Haven machine contract. Keep Git commits and independent backups.
 
 ## Read this before installing
 
@@ -19,7 +19,7 @@ dmc runs beside your editor, records eligible file versions in a local `.dmc/` f
 
 ## Get the right build
 
-This branch is an unreleased development revision. An older GitHub release or Homebrew package may not contain these changes. For an invited trial, use the exact archive and checksum supplied by the maintainer and verify that `dmc --version` prints `1.1.0-dev.5`.
+This branch is an unreleased development revision. An older GitHub release or Homebrew package may not contain these changes. For an invited trial, use the exact archive and checksum supplied by the maintainer and verify that `dmc --version` prints `1.1.0-dev.5.1`.
 
 ### Maintainer-provided bundle
 
@@ -269,3 +269,7 @@ Do not edit the project during a restore. The journal makes completed steps dete
 Use [GitHub Issues](https://github.com/EvilMetaMonkey/dmc/issues) if you have access, or the feedback route supplied with your invited build. Include the dmc version, OS/processor, exact commands, expected result, actual result, and whether the watcher was ready. Remove private paths and file contents. Never attach a raw `.dmc/` vault unless you have deliberately reviewed its contents and arranged an appropriate transfer.
 
 Developer details: [Phase 5 handoff](docs/PHASE5-IMPLEMENTATION.md), [Haven integration contract](docs/HAVEN-INTEGRATION.md), [Phase 4 handoff](docs/PHASE4-IMPLEMENTATION.md), and [original readiness audit](docs/TESTER-READINESS-AUDIT.md). No cloud service or Haven integration is required to use standalone dmc.
+
+## License
+
+dmc is released under the [MIT License](LICENSE).

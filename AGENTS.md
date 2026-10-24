@@ -259,7 +259,7 @@ Use `docs/TESTER-READINESS-AUDIT.md` as the original audit and the Phase 2/3 han
 - `dart run bin/dmc.dart capabilities --json`
 - `dart test`
 - `dart analyze`
-- `dart run tool/check_analyzer.dart` (CI gate; explicitly allows only the pre-existing `_shiftArtLineLeft` UI warning)
+- `dart run tool/check_analyzer.dart` (CI gate; fails on any analyzer diagnostic)
 - `dart build cli -o build/dmc`
 - `dart run tool/smoke_bundle.dart build/dmc/bundle/bin/dmc` (append `.exe` on Windows)
 

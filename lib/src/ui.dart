@@ -1384,18 +1384,6 @@ List<String> buildSplashDeloreanArt() {
       .toList(growable: false);
 }
 
-String _shiftArtLineLeft(String line, [int columns = 1]) {
-  if (columns <= 0 || line.isEmpty) {
-    return line;
-  }
-  final leadingSpaces = line.length - line.trimLeft().length;
-  if (leadingSpaces == 0) {
-    return line;
-  }
-  final shift = leadingSpaces < columns ? leadingSpaces : columns;
-  return line.substring(shift);
-}
-
 void _rule(Console console, int row, int width, ConsoleColor color) =>
     _at(console, row, 0, '─' * width, fg: color, maxWidth: width);
 

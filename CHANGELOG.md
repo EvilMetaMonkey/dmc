@@ -4,6 +4,8 @@
 - Report journal-bound per-file recovery targets and conflicts without changing workspace files, source SQLite sidecars, or operation state.
 - Verify saved pre-operation recovery bytes during the shared preflight before rollback starts.
 - Keep existing explicit recovery execution behavior. Haven's existing pinned bundle is not automatically upgraded.
+- Release under the MIT License.
+- Remove the unused `_shiftArtLineLeft` UI helper; the CI analyzer gate now fails on any diagnostic (fixes the Windows CI failure caused by path matching in the old exception).
 
 ## 1.1.0-dev.5 — Unreleased
 
