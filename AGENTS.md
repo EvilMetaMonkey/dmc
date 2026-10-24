@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project Summary
-dmc (DeLorean Motor Company) is a Dart CLI for local shadow-history version control designed for AI-assisted coding workflows. It watches project files, debounces rapid changes, stores snapshot metadata plus hashed backups in a hidden repo-local `.dmc/` SQLite vault, restores prior file states quickly, and can diff a working file against historical snapshots.
+dmc is a Dart CLI for local shadow-history version control designed for AI-assisted coding workflows. It watches project files, debounces rapid changes, stores snapshot metadata plus hashed backups in a hidden repo-local `.dmc/` SQLite vault, restores prior file states quickly, and can diff a working file against historical snapshots.
 
 The long-term product direction is:
 

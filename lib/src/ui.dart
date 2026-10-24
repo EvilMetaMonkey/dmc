@@ -395,9 +395,7 @@ class DmcUiController {
     if (action == DmcUiMenuAction.quit) {
       return DmcUiTransition(state: _state, shouldExit: true);
     }
-    _state = _state.copyWith(
-      statusMessage: _splashActionMessage(action),
-    );
+    _state = _state.copyWith(statusMessage: _splashActionMessage(action));
     return DmcUiTransition(state: _state);
   }
 
@@ -665,17 +663,12 @@ void _renderSplash(Console console, DmcUiState state) {
   }
 
   final carTop = compact ? 2 : 3;
-  final deloreanArt = buildSplashDeloreanArt();
-  for (var i = 0; i < deloreanArt.length; i++) {
-    _writeCenteredLine(
-      console,
-      carTop + i,
-      deloreanArt[i],
-      fg: ConsoleColor.white,
-    );
+  final carArt = buildSplashCarArt();
+  for (var i = 0; i < carArt.length; i++) {
+    _writeCenteredLine(console, carTop + i, carArt[i], fg: ConsoleColor.white);
   }
 
-  final statusRow = carTop + deloreanArt.length + 1;
+  final statusRow = carTop + carArt.length + 1;
   _statusRow(console, statusRow, width, compact: compact);
   _menu(console, state, statusRow + 2, width, compact: compact);
 
@@ -939,7 +932,7 @@ void _header(Console console, int width, String basePath, int count) {
   _center(
     console,
     1,
-    compact ? 'dmc - Dashboard' : 'dmc - DeLorean Dashboard',
+    compact ? 'dmc - Dashboard' : 'dmc - History Dashboard',
     ConsoleColor.brightWhite,
     maxWidth: width - 8,
   );
@@ -1358,7 +1351,7 @@ void _writeCenteredLine(
   _at(console, row, col, visible, fg: fg, maxWidth: console.windowWidth - col);
 }
 
-List<String> buildSplashDeloreanArt() {
+List<String> buildSplashCarArt() {
   const lines = [
     r"               /\                                             /\               ",
     r"              /  \_________                         _________/  \              ",
@@ -1379,9 +1372,7 @@ List<String> buildSplashDeloreanArt() {
     0,
     (maxWidth, line) => line.length > maxWidth ? line.length : maxWidth,
   );
-  return lines
-      .map((line) => line.padRight(artWidth))
-      .toList(growable: false);
+  return lines.map((line) => line.padRight(artWidth)).toList(growable: false);
 }
 
 void _rule(Console console, int row, int width, ConsoleColor color) =>

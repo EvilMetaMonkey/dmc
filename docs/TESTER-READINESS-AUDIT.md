@@ -2,7 +2,7 @@
 
 > Historical audit following Phase 1. Phases 2–4 have since been implemented locally for review; see [the Phase 4 handoff](PHASE4-IMPLEMENTATION.md), [Phase 3 handoff](PHASE3-IMPLEMENTATION.md), and [Phase 2 handoff](PHASE2-IMPLEMENTATION.md) for fixes, current verification, and remaining release gates. Findings below describe the earlier audited state, not fresh reproductions against the newer implementation.
 
-Audit date: September 4, 2026. Canonical repository `/Users/mike_h/Projects/dmc`, base `e2494b3`, with the uncommitted Phase 1 implementation and preserved user UI work.
+Audit date: September 4, 2026. Canonical repository `EvilMetaMonkey/dmc`, base `e2494b3`, with the uncommitted Phase 1 implementation and preserved user UI work.
 
 ## Verdict
 

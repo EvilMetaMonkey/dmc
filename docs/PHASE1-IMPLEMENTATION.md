@@ -1,8 +1,8 @@
 # Phase 1 implementation — review handoff
 
-Audit date: September 4, 2026 (America/Chicago). Canonical repository: `/Users/mike_h/Projects/dmc`. Base commit: `e2494b3`. Changes are uncommitted and unreleased.
+Audit date: September 4, 2026 (America/Chicago). Canonical repository: `EvilMetaMonkey/dmc`. Base commit: `e2494b3`. Changes are uncommitted and unreleased.
 
-Scope: Phase 1 of `/Users/mike_h/Projects/ADE Project (1)/DMC-Checkpoint-Hardening-Plan.md`. Implementation stops here. Remaining work is assessed in [TESTER-READINESS-AUDIT.md](TESTER-READINESS-AUDIT.md).
+Scope: Phase 1 of the DMC checkpoint hardening plan. Implementation stops here. Remaining work is assessed in [TESTER-READINESS-AUDIT.md](TESTER-READINESS-AUDIT.md).
 
 ## Delivered behavior
 
@@ -35,7 +35,7 @@ test/ui_test.dart
 
 ## Validation
 
-Environment: macOS arm64; Dart 3.11.5. SDK executable: `/Users/mike_h/.flutter-sdk/bin/cache/dart-sdk/bin/dart`.
+Environment: macOS arm64; Dart 3.11.5. SDK executable: the Flutter-bundled Dart SDK.
 
 | Check | Result |
 | --- | --- |

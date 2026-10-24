@@ -147,8 +147,8 @@ void main() {
       expect(computeCenteredColumn(width: 0, text: 'DMC'), 0);
     });
 
-    test('splash delorean art matches the traced reference lines', () {
-      final art = buildSplashDeloreanArt();
+    test('splash car art matches the traced reference lines', () {
+      final art = buildSplashCarArt();
       expect(art.map((line) => line.length).toSet(), hasLength(1));
       expect(
         art.map((line) => line.trimRight()).toList(),

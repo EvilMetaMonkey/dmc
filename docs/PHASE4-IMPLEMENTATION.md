@@ -1,6 +1,6 @@
 # Phase 4 implementation and review handoff
 
-September 5, 2026. Canonical repository: `/Users/mike_h/Projects/dmc`. Development version: `1.1.0-dev.4`. These are local, uncommitted changes on top of Phases 1–3 and the user's existing UI edits. No commit, push, release, source-visibility change, or license selection has been performed.
+September 5, 2026. Canonical repository: `EvilMetaMonkey/dmc`. Development version: `1.1.0-dev.4`. These are local, uncommitted changes on top of Phases 1–3 and the user's existing UI edits. No commit, push, release, source-visibility change, or license selection has been performed.
 
 ## Review verdict
 
