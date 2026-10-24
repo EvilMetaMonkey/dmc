@@ -5,6 +5,8 @@
 - Verify saved pre-operation recovery bytes during the shared preflight before rollback starts.
 - Keep existing explicit recovery execution behavior. Haven's existing pinned bundle is not automatically upgraded.
 - Release under the MIT License.
+- Document that machine JSON on stdout is UTF-8 on every platform; the Haven contract harness now decodes it as UTF-8 (Windows defaulted to the active code page and mangled Unicode workspace paths).
+- Fix Windows-only test failures (locked-file read in a recovery preview test).
 - Remove the unused `_shiftArtLineLeft` UI helper; the CI analyzer gate now fails on any diagnostic (fixes the Windows CI failure caused by path matching in the old exception).
 
 ## 1.1.0-dev.5 — Unreleased

@@ -273,6 +273,8 @@ Future<ProcessResult> _run(
     binary,
     arguments,
     workingDirectory: workspace,
+    stdoutEncoding: utf8,
+    stderrEncoding: utf8,
   ).timeout(const Duration(seconds: 60));
   expect(
     result.exitCode,
@@ -325,14 +327,12 @@ Future<String?> _waitForApplyingOperation(
 ) async {
   final deadline = DateTime.now().add(const Duration(seconds: 20));
   while (DateTime.now().isBefore(deadline)) {
-    final result = await Process.run(binary, [
-      'checkpoint',
-      'show',
-      checkpointId,
-      '--json',
-      '--schema-version',
-      '1',
-    ], workingDirectory: workspace);
+    final result = await Process.run(
+      binary,
+      ['checkpoint', 'show', checkpointId, '--json', '--schema-version', '1'],
+      workingDirectory: workspace,
+      stdoutEncoding: utf8,
+    );
     if (result.exitCode == 0) {
       final decoded = jsonDecode((result.stdout as String).trim()) as Map;
       final operations = decoded['data']['operations'] as List;

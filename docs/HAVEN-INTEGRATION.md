@@ -12,7 +12,7 @@ Run this before enabling checkpoint controls for a workspace:
 
 The command must exit `0`, return `ok: true`, identify `contract: haven-checkpoint-v1`, list machine schema `1`, list checkpoint manifest `1`, and advertise every command Haven needs. An unknown flag or unsupported schema exits `2` with one JSON error object. Haven must treat missing capabilities, an unknown envelope schema, or a different workspace fingerprint as incompatible.
 
-Every JSON command emits exactly one object on stdout:
+Every JSON command emits exactly one object on stdout, encoded as UTF-8 on every platform (decode stdout as UTF-8; on Windows do not rely on the console code page):
 
 ```json
 {

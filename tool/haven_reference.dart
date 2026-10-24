@@ -39,6 +39,8 @@ Future<void> main(List<String> args) async {
       binary,
       arguments,
       workingDirectory: workspace.path,
+      stdoutEncoding: utf8,
+      stderrEncoding: utf8,
     ).timeout(const Duration(seconds: 60));
     final result = _CliResult(
       process.exitCode,
