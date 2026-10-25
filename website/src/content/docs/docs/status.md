@@ -41,9 +41,9 @@ is macOS arm64.
 
 ## Licensing
 
-No public license has been granted yet. Preview builds are shared for evaluation
-and do not grant an open-source license. A licensing and distribution decision
-is part of the remaining release work.
+dmc is released under the [MIT License](https://github.com/EvilMetaMonkey/dmc/blob/main/LICENSE).
+Binary distribution, signing, and release gates are still part of the remaining
+release work.
 
 ## What is intentionally not promised yet
 

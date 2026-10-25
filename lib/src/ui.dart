@@ -1121,7 +1121,7 @@ Future<void> _diff(
     row,
     col,
     width,
-    'FLUX CAPACITOR - DIFF VIEW',
+    'SNAPSHOT DIFF VIEW',
     rightText: 'Live Preview',
   );
   if (entry == null) {
@@ -1248,7 +1248,7 @@ void _menu(
 }
 
 void _statusRow(Console console, int row, int width, {required bool compact}) {
-  final vault = compact ? 'flux-capacitor' : 'flux-capacitor v0.9 (980MB)';
+  final vault = compact ? '.dmc' : 'local .dmc vault';
   final text = 'SYSTEM: ONLINE | VAULT: $vault | HOUSTON-WS-1';
   final col = ((width - text.length) ~/ 2).clamp(4, width - 4);
   _at(console, row, 4, '─' * (col - 6), fg: ConsoleColor.brightBlack);

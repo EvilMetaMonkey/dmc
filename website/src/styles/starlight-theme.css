@@ -1,13 +1,13 @@
 /* ============================================================
    dmc + Haven — Starlight theme overrides
-   Palette: deep-space slate, flux cyan, time-circuit amber.
+   Palette: deep-space slate, electric cyan, signal amber.
    Forced dark-first: both Starlight themes are overridden.
    ============================================================ */
 
 :root,
 :root[data-theme='light'],
 :root[data-theme='dark'] {
-  /* Accent ramp (flux cyan) */
+  /* Accent ramp (electric cyan) */
   --sl-color-accent-low: #083344;
   --sl-color-accent: #22d3ee;
   --sl-color-accent-high: #a5f3fc;
